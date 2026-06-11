@@ -1,0 +1,221 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  /* ROYAL (light): ivory surfaces, deep royal blue & purple, gold accents */
+  --background: #f7f3ea;
+  --surface: #fffefa;
+  --surface-2: #f1ecdf;
+  --ink: #1d2150;
+  --ink-soft: #5c6390;
+  --line: #e2dbc7;
+  --brand: #32409f;
+  --brand-2: #6b3fa5;
+  --on-brand: #ffffff;
+  --gold: #8f721c;
+  --gold-bright: #c9a227;
+  --danger: #a8312a;
+  --success: #1c7a4c;
+  --card-shadow:
+    0 1px 2px rgba(29, 33, 80, 0.06),
+    0 8px 24px -12px rgba(29, 33, 80, 0.18);
+}
+
+.dark {
+  /* GALAXY (dark): deep-space navy, nebula purples, cosmic blues, soft glow */
+  --background: #050917;
+  --surface: #0d1330;
+  --surface-2: #141b3e;
+  --ink: #e9ecff;
+  --ink-soft: #9aa3d7;
+  --line: #232c5c;
+  --brand: #8d9bff;
+  --brand-2: #b18cff;
+  --on-brand: #0a0f2e;
+  --gold: #e8c172;
+  --gold-bright: #f4d088;
+  --danger: #ff8b80;
+  --success: #5fd49a;
+  --card-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 10px 30px -12px rgba(90, 100, 230, 0.3);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-line: var(--line);
+  --color-brand: var(--brand);
+  --color-brand-2: var(--brand-2);
+  --color-on-brand: var(--on-brand);
+  --color-gold: var(--gold);
+  --color-gold-bright: var(--gold-bright);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --font-sans:
+    "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    sans-serif;
+  --font-display:
+    "Space Grotesk Variable", "Inter Variable", ui-sans-serif, system-ui,
+    sans-serif;
+}
+
+html {
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--background);
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1.6;
+  min-height: 100dvh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Royal wash: faint regal gradients on ivory */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      1100px 500px at 85% -10%,
+      rgba(107, 63, 165, 0.1),
+      transparent 60%
+    ),
+    radial-gradient(
+      900px 420px at 10% -10%,
+      rgba(50, 64, 159, 0.1),
+      transparent 60%
+    ),
+    radial-gradient(
+      700px 300px at 50% 110%,
+      rgba(201, 162, 39, 0.08),
+      transparent 60%
+    );
+}
+
+/* Galaxy: nebula glows… */
+.dark body::before {
+  background:
+    radial-gradient(
+      1200px 600px at 80% -15%,
+      rgba(177, 140, 255, 0.16),
+      transparent 60%
+    ),
+    radial-gradient(
+      1000px 500px at 8% -10%,
+      rgba(90, 120, 255, 0.14),
+      transparent 55%
+    ),
+    radial-gradient(
+      800px 500px at 50% 115%,
+      rgba(64, 89, 255, 0.1),
+      transparent 60%
+    );
+}
+
+/* …and a subtle starfield */
+.dark body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    radial-gradient(1px 1px at 22px 34px, rgba(255, 255, 255, 0.55), transparent 1.5px),
+    radial-gradient(1px 1px at 132px 80px, rgba(255, 255, 255, 0.35), transparent 1.5px),
+    radial-gradient(1.5px 1.5px at 200px 150px, rgba(244, 208, 136, 0.5), transparent 2px),
+    radial-gradient(1px 1px at 70px 190px, rgba(255, 255, 255, 0.4), transparent 1.5px),
+    radial-gradient(1px 1px at 250px 40px, rgba(173, 196, 255, 0.45), transparent 1.5px),
+    radial-gradient(1.2px 1.2px at 170px 230px, rgba(255, 255, 255, 0.3), transparent 2px);
+  background-size: 280px 260px;
+  opacity: 0.7;
+}
+
+/* Shared component styles */
+.card-shadow {
+  box-shadow: var(--card-shadow);
+}
+
+.input {
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid var(--line);
+  background: var(--background);
+  padding: 0.625rem 0.875rem;
+  font-size: 1rem;
+  color: var(--ink);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.input::placeholder {
+  color: color-mix(in srgb, var(--ink-soft) 70%, transparent);
+}
+.input:focus {
+  outline: none;
+  border-color: var(--gold-bright);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold-bright) 25%, transparent);
+}
+
+/* Rendered job-description HTML (sanitised on the server) */
+.job-description {
+  font-size: 1rem;
+  color: color-mix(in srgb, var(--ink) 92%, transparent);
+  overflow-wrap: anywhere;
+}
+.job-description p {
+  margin: 0 0 0.9em;
+}
+.job-description ul,
+.job-description ol {
+  margin: 0 0 1em;
+  padding-left: 1.5em;
+}
+.job-description ul li {
+  list-style: disc;
+  margin: 0.35em 0;
+}
+.job-description ol li {
+  list-style: decimal;
+  margin: 0.35em 0;
+}
+.job-description h2,
+.job-description h3,
+.job-description h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  margin: 1.2em 0 0.5em;
+}
+.job-description a {
+  color: var(--brand);
+  text-decoration: underline;
+}
+.job-description strong,
+.job-description b {
+  font-weight: 600;
+}
+
+:focus-visible {
+  outline: 2px solid var(--gold-bright);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
