@@ -43,3 +43,7 @@ next-env.d.ts
 
 # local tooling
 .claude/
+
+# scratch / agent temp files
+tmp_*.mjs
+tmp_*.js
