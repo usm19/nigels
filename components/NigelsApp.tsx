@@ -15,6 +15,7 @@ import { isExpiredByPosting } from "@/lib/format";
 import {
   alertFieldsFromSearch,
   applySearchFilters,
+  scopeFromAlert,
   searchFromAlert,
 } from "@/lib/search";
 import { TickProvider, useNow } from "./TickContext";
@@ -372,7 +373,8 @@ function AppShell() {
   }
 
   async function saveSearch(name: string): Promise<boolean> {
-    const active = tab === "government" ? govSearch : jobsSearch;
+    const scope = tab === "government" ? "government" : "jobs";
+    const active = scope === "government" ? govSearch : jobsSearch;
     setBusySearches(true);
     try {
       const res = await fetch("/api/alerts", {
@@ -381,7 +383,7 @@ function AppShell() {
         body: JSON.stringify({
           name,
           is_active: true,
-          ...alertFieldsFromSearch(active),
+          ...alertFieldsFromSearch(active, scope),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -405,8 +407,14 @@ function AppShell() {
 
   function loadSearch(alert: Alert) {
     const loaded = searchFromAlert(alert);
-    setJobsSearch(loaded);
-    setTab("jobs");
+    const scope = scopeFromAlert(alert);
+    if (scope === "government") {
+      setGovSearch(loaded);
+      setTab("government");
+    } else {
+      setJobsSearch(loaded);
+      setTab("jobs");
+    }
     setDetail(null);
     void handleRefresh(loaded);
   }

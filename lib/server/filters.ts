@@ -42,13 +42,24 @@ export function isBirminghamLocation(
 
 /**
  * Birmingham gate for the aggregator sources (Jooble, JSearch) whose
- * structured location field is sparse or vague. We scan a combined haystack
- * of every location/title/description clue for a Birmingham signal. This is
- * looser than the precise Adzuna/Reed location filter, so it is honestly
- * documented as such.
+ * structured location field is sparse or vague.
+ *
+ * The postcode-district heuristic is applied ONLY to the location text —
+ * tokens like "B12" (vitamin), "B2B", "B7" appear constantly in titles and
+ * descriptions and must NOT be read as Birmingham postcodes. The literal word
+ * "Birmingham" is accepted in the location OR the title. The non-UK veto runs
+ * on the location only (a UK job whose advert mentions "USA" is still UK).
+ * Descriptions are deliberately not used — too noisy to be a reliable signal.
  */
-export function mentionsBirmingham(...parts: Array<string | null | undefined>): boolean {
-  return isBirminghamLocation(parts.filter(Boolean).join(" | "));
+export function mentionsBirmingham(
+  location: string | null | undefined,
+  title: string | null | undefined
+): boolean {
+  // location: full strength (word OR postcode district), with non-UK veto.
+  if (isBirminghamLocation(location)) return true;
+  // title: only the explicit word counts (no postcode-token matching).
+  if (title && !NON_UK.test(title) && BIRMINGHAM_WORD.test(title)) return true;
+  return false;
 }
 
 // --- Remote / hybrid detection ---------------------------------------------

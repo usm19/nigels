@@ -159,7 +159,7 @@ export async function searchJSearch(q: SourceQuery): Promise<FetchedJob[]> {
     ]
       .filter(Boolean)
       .join(", ");
-    if (!mentionsBirmingham(locationText, title, description)) continue;
+    if (!mentionsBirmingham(locationText, title)) continue;
 
     const posted =
       r.job_posted_at_datetime_utc &&

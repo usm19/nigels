@@ -21,8 +21,12 @@ export interface ExcludableJob {
   industry?: string | null;
 }
 
+// The halal scope is the TITLE + EMPLOYER + INDUSTRY (as specified) — NOT the
+// free-text description. Matching the description caused false positives
+// (e.g. a software role mentioning "checkout funnel", or an office above a
+// "pub"). The employer name still catches "neutral title at a haram employer".
 function haystack(job: ExcludableJob): string {
-  return `${job.title} ${job.company ?? ""} ${job.industry ?? ""} ${job.description ?? ""}`
+  return `${job.title} ${job.company ?? ""} ${job.industry ?? ""}`
     .toLowerCase()
     .replace(/\s+/g, " ");
 }
@@ -39,10 +43,13 @@ interface Category {
 const CATEGORIES: Category[] = [
   {
     name: "banking_riba",
-    // Sharia-compliant / Islamic finance and everyday non-finance uses of
-    // "bank" (food bank, blood bank, etc.) are protected.
+    // Protected: Sharia-compliant / Islamic finance; everyday non-finance
+    // uses of "bank" (food/blood/bottle/data/seed/memory bank, bank holiday,
+    // river/piggy bank); and the NHS/care "staff bank" sense — in the UK
+    // "Bank Nurse / Bank HCA / Bank Support Worker" means flexible clinical
+    // staff, not a financial-services role.
     carveOut:
-      /\b(islamic|sharia|shariah|takaful)\b|al ?rayan|gatehouse bank|islamic finance|halal (?:finance|investment|mortgage|bank)|food ?bank|blood ?bank|bottle ?bank|data ?bank|bank holiday|river ?bank|piggy ?bank|seed ?bank|memory bank/,
+      /\b(islamic|sharia|shariah|takaful)\b|al ?rayan|gatehouse bank|islamic finance|halal (?:finance|investment|mortgage|bank)|food ?bank|blood ?bank|bottle ?bank|data ?bank|bank holiday|river ?bank|piggy ?bank|seed ?bank|memory bank|\bbank\s+(?:nurse|nurses|nursing|hca|health\s?care|care|carer|midwife|midwives|support worker|domestic|porter|theatre|ward|clinical|mental health|physio|radiographer|sonographer|pharmacist|phlebotomist|cleaner|catering)\b|\b(?:staff|nurse|nursing|clinical|care|nhs)\s+bank\b/,
     pattern: new RegExp(
       [
         String.raw`\bbank\b`,

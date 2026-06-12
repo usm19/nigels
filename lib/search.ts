@@ -8,6 +8,7 @@ import type {
   SectorFilter,
   SortOption,
 } from "./types";
+export type { SearchScope } from "./types";
 import { DEFAULT_SEARCH } from "./types";
 import {
   matchesAnyTerm,
@@ -131,20 +132,33 @@ interface SavedSearchExtras {
   searchDescriptions?: boolean;
   sort?: SortOption;
   sectorFilter?: SectorFilter;
+  /** Which tab the search belongs to, so it reloads into the right one. */
+  scope?: SearchScope;
+}
+
+function readExtras(alert: Alert): SavedSearchExtras {
+  const raw = (alert.keywords ?? "").trim();
+  if (raw.startsWith("{")) {
+    try {
+      return JSON.parse(raw) as SavedSearchExtras;
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+/** Which tab a saved search should load into. */
+export function scopeFromAlert(alert: Alert): SearchScope {
+  return readExtras(alert).scope === "government" ? "government" : "jobs";
 }
 
 /** Turn a saved search (alert row) back into search-bar state. */
 export function searchFromAlert(alert: Alert): SearchState {
-  let extras: SavedSearchExtras = {};
+  const extras = readExtras(alert);
   let keywordTerms: string[] = [];
   const raw = (alert.keywords ?? "").trim();
-  if (raw.startsWith("{")) {
-    try {
-      extras = JSON.parse(raw) as SavedSearchExtras;
-    } catch {
-      // Unreadable extras — fall back to defaults.
-    }
-  } else if (raw) {
+  if (!raw.startsWith("{") && raw) {
     keywordTerms = raw
       .split(",")
       .map((t) => t.trim().toLowerCase())
@@ -175,14 +189,15 @@ export function searchFromAlert(alert: Alert): SearchState {
   };
 }
 
-/** The fields stored when saving the current search. */
-export function alertFieldsFromSearch(s: SearchState) {
+/** The fields stored when saving the current search (with its tab/scope). */
+export function alertFieldsFromSearch(s: SearchState, scope: SearchScope) {
   const extras: SavedSearchExtras = {
     exclude: s.excludeTerms,
     postedWithinHours: s.postedWithinHours,
     searchDescriptions: s.searchDescriptions,
     sort: s.sort,
     sectorFilter: s.sectorFilter,
+    scope,
   };
   return {
     tags: s.terms,
@@ -190,7 +205,8 @@ export function alertFieldsFromSearch(s: SearchState) {
     employment_types: s.employmentTypes,
     contract_types: s.contractTypes,
     experience_levels: s.experienceLevels,
-    government_only: false,
+    // Kept in sync for the legacy column; scope is the source of truth.
+    government_only: scope === "government",
     salary_min: s.salaryMin,
     salary_max: s.salaryMax,
   };

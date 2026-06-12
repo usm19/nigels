@@ -95,8 +95,8 @@ export async function searchJooble(q: SourceQuery): Promise<FetchedJob[]> {
     const description = htmlToText(r.snippet);
     const company = r.company?.trim() || null;
 
-    // Birmingham gate across every available clue (location is usually vague).
-    if (!mentionsBirmingham(r.location, title, description)) continue;
+    // Birmingham gate: location field (word/postcode) or the word in the title.
+    if (!mentionsBirmingham(r.location, title)) continue;
 
     const posted =
       r.updated && !Number.isNaN(Date.parse(r.updated))

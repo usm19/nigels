@@ -185,9 +185,13 @@ async function runJSearch(
   }
   // ONE request per allowed call — use the first planned query only.
   const q = plan[0];
+  // Record the attempt BEFORE the request: a 429/5xx still consumes the
+  // provider's quota, and setting the per-query cooldown now stops us
+  // hammering a failing provider on every refresh. This protects the hard
+  // 200/month limit even when JSearch is erroring.
+  await recordJSearchCall(jsearchQueryKey(search), nowMs);
   try {
     const results = await searchJSearch(q);
-    await recordJSearchCall(jsearchQueryKey(search), nowMs);
     const kept = results.filter((job) =>
       passesSearchGate(job, search, nowMs, todayEpochDays)
     );

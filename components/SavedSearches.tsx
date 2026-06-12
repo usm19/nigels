@@ -8,6 +8,7 @@ import {
   EXPERIENCE_LEVEL_LABELS,
 } from "@/lib/types";
 import { formatSalary } from "@/lib/format";
+import { scopeFromAlert } from "@/lib/search";
 import { Badge, EmptyState, btnDanger, btnPrimary } from "./ui";
 
 interface SavedSearchesProps {
@@ -98,8 +99,8 @@ export function SavedSearches({
                     {EXPERIENCE_LEVEL_LABELS[t]}
                   </Badge>
                 ))}
-                {alert.government_only && (
-                  <Badge tone="gold">Public sector</Badge>
+                {scopeFromAlert(alert) === "government" && (
+                  <Badge tone="gold">Government</Badge>
                 )}
                 {salary && <Badge tone="gold">{salary}</Badge>}
               </div>

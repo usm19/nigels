@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   Bookmark,
   Briefcase,
@@ -77,14 +77,50 @@ export function Sidebar({
   mobileOpen,
   onMobileClose,
 }: SidebarProps) {
-  // Close the mobile drawer on Escape.
+  const drawerRef = useRef<HTMLDivElement>(null);
+
+  // Mobile drawer accessibility: Escape closes; focus moves into the drawer
+  // on open; Tab is trapped inside it; body scroll is locked; and focus is
+  // restored to the menu trigger on close.
   useEffect(() => {
     if (!mobileOpen) return;
+    const opener = document.activeElement as HTMLElement | null;
+    const drawer = drawerRef.current;
+    const focusables = () =>
+      Array.from(
+        drawer?.querySelectorAll<HTMLElement>(
+          'button, a[href], [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter((el) => !el.hasAttribute("disabled"));
+
+    focusables()[0]?.focus();
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onMobileClose();
+      if (e.key === "Escape") {
+        onMobileClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+      opener?.focus?.();
+    };
   }, [mobileOpen, onMobileClose]);
 
   return (
@@ -105,7 +141,10 @@ export function Sidebar({
             onClick={onMobileClose}
             className="absolute inset-0 bg-black/50 backdrop-blur-sm"
           />
-          <div className="absolute left-0 top-0 flex h-full w-72 max-w-[82%] flex-col gap-4 border-r border-line bg-surface px-3 py-4 shadow-2xl">
+          <div
+            ref={drawerRef}
+            className="absolute left-0 top-0 flex h-full w-72 max-w-[82%] flex-col gap-4 border-r border-line bg-surface px-3 py-4 shadow-2xl"
+          >
             <div className="flex items-center justify-between px-1">
               <Logo />
               <button
