@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { Job, JobsResponse } from "@/lib/types";
 import { isExpiredByPosting } from "@/lib/format";
 import { getSupabase } from "@/lib/server/supabase";
+import { isExcluded } from "@/lib/server/exclude";
 import { londonTodayEpochDays } from "@/lib/server/time";
 
 export const dynamic = "force-dynamic";
@@ -23,8 +24,11 @@ export async function GET() {
 
     const nowMs = Date.now();
     const todayDays = londonTodayEpochDays();
+    // Read-time pass of the always-on exclusion, plus the 24h freshness rule.
     const jobs = ((data ?? []) as Job[]).filter(
-      (j) => j.status === "applied" || !isExpiredByPosting(j, nowMs, todayDays)
+      (j) =>
+        !isExcluded(j) &&
+        (j.status === "applied" || !isExpiredByPosting(j, nowMs, todayDays))
     );
 
     const body: JobsResponse = { jobs };

@@ -11,7 +11,9 @@ import type {
   ContractType,
   EmploymentType,
   ExperienceLevel,
+  SearchScope,
   SearchState,
+  SectorFilter,
   SortOption,
 } from "@/lib/types";
 import {
@@ -28,6 +30,7 @@ import { TagInput } from "./TagInput";
 import { Spinner, btnGhost, btnPrimary } from "./ui";
 
 interface SearchBarProps {
+  scope: SearchScope;
   search: SearchState;
   onChange: (next: SearchState) => void;
   onSaveSearch: (name: string) => Promise<boolean>;
@@ -42,6 +45,12 @@ const POSTED_WITHIN_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "3", label: "Last 3 hours" },
   { value: "8", label: "Last 8 hours" },
   { value: "24", label: "Last 24 hours" },
+];
+
+const SECTOR_FILTER_OPTIONS: Array<{ value: SectorFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "public_sector", label: "Public sector" },
+  { value: "private", label: "Private" },
 ];
 
 function FilterPill({
@@ -76,8 +85,9 @@ function parseMoney(raw: string): number | null {
   return Number.isFinite(n) && n > 0 ? Math.min(n, 10_000_000) : null;
 }
 
-/** The main search bar — the primary way to search, like any big job site. */
+/** The main search bar — used for both the Jobs and Government tabs. */
 export function SearchBar({
+  scope,
   search,
   onChange,
   onSaveSearch,
@@ -89,6 +99,7 @@ export function SearchBar({
   const [saveName, setSaveName] = useState("");
 
   const filterCount = activeFilterCount(search);
+  const isGov = scope === "government";
 
   function patch(p: Partial<SearchState>) {
     onChange({ ...search, ...p });
@@ -111,13 +122,15 @@ export function SearchBar({
 
   return (
     <section
-      aria-label="Job search"
+      aria-label={isGov ? "Government job search" : "Job search"}
       className="card-shadow rounded-2xl border border-line bg-surface p-4 sm:p-5"
     >
       <div className="flex items-center gap-2">
         <Search size={20} className="shrink-0 text-gold" aria-hidden />
         <h2 className="font-display text-base font-semibold text-ink sm:text-lg">
-          Search Birmingham jobs
+          {isGov
+            ? "Search Birmingham government jobs"
+            : "Search Birmingham jobs"}
         </h2>
       </div>
 
@@ -125,11 +138,46 @@ export function SearchBar({
         <TagInput
           value={search.terms}
           onChange={(terms) => patch({ terms })}
-          placeholder="Job title — e.g. administrator, barista, software engineer…"
+          placeholder={
+            isGov
+              ? "Job title — e.g. policy advisor, caseworker…"
+              : "Job title — e.g. administrator, barista, software engineer…"
+          }
           ariaLabel="Search job titles"
           hint="Suggestions appear as you type. Titles only — press Refresh to pull fresh jobs."
         />
       </div>
+
+      {/* Jobs tab: clean separation of public sector vs private. */}
+      {!isGov && (
+        <div className="mt-3">
+          <span className="mb-1.5 block text-sm font-medium text-ink">
+            Sector
+          </span>
+          <div
+            role="radiogroup"
+            aria-label="Sector"
+            className="flex flex-wrap gap-2"
+          >
+            {SECTOR_FILTER_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                role="radio"
+                aria-checked={search.sectorFilter === o.value}
+                onClick={() => patch({ sectorFilter: o.value })}
+                className={`min-h-10 rounded-xl border px-3.5 text-sm font-medium transition-all duration-150 ${
+                  search.sectorFilter === o.value
+                    ? "border-transparent bg-gradient-to-r from-brand to-brand-2 text-on-brand shadow"
+                    : "border-line bg-background text-ink-soft hover:border-gold-bright/60 hover:text-ink"
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
@@ -352,19 +400,10 @@ export function SearchBar({
                 ))}
               </select>
               <p className="mt-1.5 text-xs text-ink-soft">
-                Under 24 hours, only Adzuna qualifies — Reed gives the date,
-                not the time.
+                Under 24 hours uses to-the-minute times (Adzuna, Jooble);
+                Reed and some JSearch listings give the date only.
               </p>
             </fieldset>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <FilterPill
-              on={search.governmentOnly}
-              onClick={() => patch({ governmentOnly: !search.governmentOnly })}
-            >
-              Government / public sector only
-            </FilterPill>
           </div>
 
           <fieldset>
@@ -404,6 +443,7 @@ export function SearchBar({
                   ...DEFAULT_SEARCH,
                   terms: search.terms,
                   sort: search.sort,
+                  sectorFilter: search.sectorFilter,
                 })
               }
               className="ml-auto text-sm font-medium text-brand underline underline-offset-4 hover:text-brand-2"

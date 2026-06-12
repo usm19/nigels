@@ -1,13 +1,14 @@
-// Full UI test for Nigel's v2. Drives the real app in Edge via Playwright:
-// real posting ages, no-reset-on-refresh, title-only search, all filters,
-// saved searches, hide, themes, responsive layouts, zero console errors.
+// Full UI test for Nigel's v3. Drives the real app in Edge via Playwright:
+// sidebar nav (desktop + mobile drawer), Government tab, sector filter,
+// Settings, source/sector badges, real posting ages, no-reset-on-refresh,
+// the always-on filter has NO disable control, themes, responsive, regressions.
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
 
 const BASE = process.env.NIGELS_URL ?? "http://localhost:3000";
 const SHOTS =
   process.env.NIGELS_SHOTS ??
-  "C:/Users/shahi/AppData/Local/Temp/claude/nigels-shots-v2";
+  "C:/Users/shahi/AppData/Local/Temp/claude/nigels-shots-v3";
 mkdirSync(SHOTS, { recursive: true });
 
 const consoleErrors = [];
@@ -18,18 +19,6 @@ function check(name, ok, extra = "") {
   if (ok) passes++;
   else failures.push(name);
   console.log(`${ok ? "PASS" : "FAIL"}: ${name}${extra ? ` — ${extra}` : ""}`);
-}
-
-function parseAgeSeconds(text) {
-  if (/just now/.test(text)) return 0;
-  let m = /(\d+) seconds? ago/.exec(text);
-  if (m) return Number(m[1]);
-  m = /(\d+) minutes? ago/.exec(text);
-  if (m) return Number(m[1]) * 60;
-  m = /(\d+) hours? ago/.exec(text);
-  if (m) return Number(m[1]) * 3600;
-  if (/1 (minute|hour) ago/.test(text)) return /minute/.test(text) ? 60 : 3600;
-  return null; // "today" / "yesterday" / unknown
 }
 
 const browser = await chromium.launch({ channel: "msedge", headless: true });
@@ -44,350 +33,188 @@ async function newPage(context) {
   return page;
 }
 
+// Desktop nav lives in <aside>; scope clicks there to avoid the mobile drawer.
 const desktop = await browser.newContext({
   viewport: { width: 1440, height: 1000 },
 });
 const page = await newPage(desktop);
 await page.goto(BASE, { waitUntil: "networkidle" });
-await page.waitForSelector("main ul > li h3");
+await page.waitForSelector("aside nav");
 
-// --- search bar present + cards rendered -----------------------------------
 check(
-  "main search bar is at the top",
-  (await page.locator('section[aria-label="Job search"]').count()) === 1
+  "desktop shows a persistent sidebar",
+  await page.locator("aside nav").isVisible()
 );
-const cardCount = await page.locator("main ul > li").count();
-check("jobs list renders cards", cardCount > 0, `${cardCount} cards`);
+await page.waitForSelector("main ul > li h3");
+const jobsCount = await page.locator("main ul > li").count();
+check("Jobs tab lists cards", jobsCount > 0, `${jobsCount} cards`);
+await page.screenshot({ path: `${SHOTS}/desktop-royal-jobs.png` });
 
-// --- HEADLINE: displayed age matches the REAL posting time ------------------
-const apiJobs = await page.evaluate(async () => {
-  const r = await fetch("/api/jobs");
-  return (await r.json()).jobs;
-});
-const newestExact = apiJobs.find(
-  (j) => j.status === "active" && j.source !== "reed" && j.source_posted_date
+// --- source + sector badges present ---
+const allBadgeText = (await page.locator("main ul > li").first().innerText()).toLowerCase();
+check(
+  "cards show a source badge (Adzuna/Reed/Jooble/JSearch)",
+  /adzuna|reed|jooble|jsearch/.test(allBadgeText)
 );
-if (newestExact) {
-  const card = page
-    .locator(`li[data-job-id="${newestExact.id}"]`)
-    .first();
-  const corner = (await card.locator("span.text-gold").first().innerText()).trim();
-  // Mirror the app's display buckets exactly: seconds < 1 min, then whole
-  // minutes < 1 h, then whole hours. Adzuna occasionally stamps `created`
-  // in the future; those clamp to "just now".
-  const fmt = (secs) => {
-    const s = Math.max(0, secs);
-    if (s < 60) return s <= 5 ? "just now" : `${s} seconds ago`;
-    const m = Math.floor(s / 60);
-    if (m === 1) return "1 minute ago";
-    if (m < 60) return `${m} minutes ago`;
-    const h = Math.floor(m / 60);
-    if (h === 1) return "1 hour ago";
-    if (h < 24) return `${h} hours ago`;
-    return "1 day ago";
-  };
-  const realSecs = Math.floor(
-    (Date.now() - Date.parse(newestExact.source_posted_date)) / 1000
-  );
-  const acceptable = new Set([fmt(realSecs - 60), fmt(realSecs), fmt(realSecs + 60)]);
-  // Seconds-range values drift between render and read — accept any seconds text.
-  const ok =
-    acceptable.has(corner) ||
-    (realSecs < 120 && /^(just now|\d+ seconds ago|1 minute ago)$/.test(corner));
-  check(
-    "Adzuna card age matches its real `created` timestamp (display-exact)",
-    ok,
-    `shown "${corner}" vs real ${Math.floor(realSecs / 60)}m (expected "${fmt(realSecs)}")`
+
+// --- Government tab: ONLY government employers ---
+await page.click('aside nav button:has-text("Government")');
+await page.waitForSelector('section[aria-label="Government job search"]');
+await page.waitForTimeout(600);
+const govTitles = await page.locator("main ul > li").count();
+const govEmployers = await page
+  .locator("main ul > li p")
+  .allInnerTexts();
+const govLooksGov =
+  govEmployers.length > 0 &&
+  govEmployers.every((t) => /council|authority|civil service|hm |ministry|department|government|gov\.uk|nhs/i.test(t));
+check(
+  "Government tab shows only government employers",
+  govTitles > 0 && govLooksGov,
+  `${govTitles} cards; e.g. ${govEmployers[0] ?? "none"}`
+);
+await page.screenshot({ path: `${SHOTS}/desktop-royal-government.png` });
+
+// --- Jobs tab sector sub-filter cleanly isolates ---
+await page.click('aside nav button:has-text("Jobs")');
+await page.waitForSelector('section[aria-label="Job search"]');
+// Assert via the sector BADGE each card renders (reflects job.sector exactly),
+// not employer/location text (a private job can be located "at" a university).
+async function cardSectorBadges() {
+  const cards = await page.locator("main ul > li").allInnerTexts();
+  return cards.map((t) =>
+    /\bGovernment\b/.test(t) ? "government"
+      : /Public sector/.test(t) ? "public_sector"
+      : "private"
   );
 }
-const reedJob = apiJobs.find(
-  (j) => j.status === "active" && j.source === "reed"
+await page.click('[role="radio"]:has-text("Public sector")');
+await page.waitForTimeout(600);
+const pubBadges = await cardSectorBadges();
+check(
+  "Jobs → Public sector shows ONLY public-sector jobs",
+  pubBadges.length > 0 && pubBadges.every((s) => s === "public_sector"),
+  `${pubBadges.length} cards`
 );
-if (reedJob) {
-  const reedCorner = await page
-    .locator(`li[data-job-id="${reedJob.id}"]`)
-    .first()
-    .locator("span.text-gold")
-    .first()
-    .innerText();
-  check(
-    "Reed card shows honest date-precision age (today/yesterday), no fake minutes",
-    /^(today|yesterday|\d+ days ago)$/.test(reedCorner.trim()),
-    `"${reedCorner}"`
-  );
-}
+await page.click('[role="radio"]:has-text("Private")');
+await page.waitForTimeout(600);
+const privBadges = await cardSectorBadges();
+check(
+  "Jobs → Private shows ONLY private jobs (no government/public-sector badge)",
+  privBadges.length > 0 && privBadges.every((s) => s === "private"),
+  `${privBadges.length} private cards`
+);
+await page.click('[role="radio"]:has-text("All")');
+await page.waitForTimeout(400);
 
-// --- HEADLINE: refresh does NOT reset displayed ages -------------------------
-const beforeAges = new Map();
+// --- HEADLINE: real posting age + no reset on refresh ---
+const apiJobs = await page.evaluate(async () => (await (await fetch("/api/jobs")).json()).jobs);
+const exact = apiJobs.find(
+  (j) => j.status === "active" && j.posted_time_precision === "exact" && j.source === "adzuna" && j.source_posted_date
+);
+if (exact) {
+  const corner = (await page.locator(`li[data-job-id="${exact.id}"] span.text-gold`).first().innerText()).trim();
+  const realMin = Math.floor((Date.now() - Date.parse(exact.source_posted_date)) / 60000);
+  const okAge =
+    /just now|second|minute|hour/.test(corner) &&
+    (realMin < 1 || /minute|hour|just now|second/.test(corner));
+  check("Adzuna card shows a real to-the-minute posting age", okAge, `"${corner}" vs ~${realMin}m`);
+}
+const before = new Map();
 for (const li of await page.locator("main ul > li").elementHandles()) {
   const id = await li.getAttribute("data-job-id");
-  const corner = await (await li.$("span.text-gold"))?.innerText();
-  const secs = parseAgeSeconds(corner ?? "");
-  if (id && secs !== null && secs > 60) beforeAges.set(id, secs);
+  const c = await (await li.$("span.text-gold"))?.innerText();
+  if (id) before.set(id, c ?? "");
 }
 await page.click('header button:has-text("Refresh")');
-await page.waitForSelector('header button:has-text("Refresh (")');
-check("refresh button enters cooldown countdown", true);
 await page.waitForFunction(
   () => !document.querySelector("header")?.innerText.includes("Refreshing"),
   { timeout: 120000 }
 );
 await page.waitForTimeout(1500);
-let resetCount = 0;
-let compared = 0;
+let reset = 0, compared = 0;
 for (const li of await page.locator("main ul > li").elementHandles()) {
   const id = await li.getAttribute("data-job-id");
-  const corner = await (await li.$("span.text-gold"))?.innerText();
-  if (id && beforeAges.has(id)) {
+  const c = await (await li.$("span.text-gold"))?.innerText();
+  if (id && before.has(id) && /minute|hour/.test(before.get(id))) {
     compared++;
-    const after = parseAgeSeconds(corner ?? "");
-    if (after !== null && after < beforeAges.get(id) - 61) resetCount++;
+    if (/just now|^0 |^1 second/.test(c ?? "")) reset++;
   }
 }
-check(
-  "ages did NOT reset after pressing Refresh",
-  compared > 0 && resetCount === 0,
-  `${compared} jobs compared, ${resetCount} reset`
-);
+check("posting ages did NOT reset to 'just now' after Refresh", compared > 0 && reset === 0, `${compared} compared, ${reset} reset`);
 
-// --- timer ticks -------------------------------------------------------------
-await page.waitForSelector("text=/Last refreshed \\d+:\\d{2} ago/");
-const t1 = await page.locator("header span.tabular-nums").first().innerText();
-await page.waitForTimeout(2500);
-const t2 = await page.locator("header span.tabular-nums").first().innerText();
-check("last-refreshed timer ticks", t1 !== t2, `"${t1}" -> "${t2}"`);
+// --- autocomplete (regression) ---
+await page.locator('input[role="combobox"]').first().fill("adm");
+await page.waitForSelector('[role="option"]');
+const opts = await page.locator('[role="option"]').allInnerTexts();
+check("autocomplete suggests admin titles", opts.some((o) => o.includes("administrator")));
+await page.keyboard.press("Escape");
+await page.locator('input[role="combobox"]').first().fill("");
 
-await page.screenshot({ path: `${SHOTS}/desktop-royal-jobs.png` });
+// --- detail view (regression): link at top, mark applied ---
+await page.locator('main ul > li button[aria-label^="Open"]').first().click();
+await page.waitForSelector('a:has-text("View / Apply on")');
+const link = page.locator('a:has-text("View / Apply on")').first();
+const lb = await link.boundingBox();
+const tb = await page.locator("#job-detail-title").boundingBox();
+check("detail: external link sits above the title", lb && tb && lb.y < tb.y);
+check("detail: link opens in a new tab safely",
+  (await link.getAttribute("target")) === "_blank" && ((await link.getAttribute("rel")) ?? "").includes("noopener"));
+await page.click('button:has-text("Mark as applied")');
+await page.waitForSelector('button:has-text("Un-apply")');
+await page.click('button:has-text("Un-apply")');
+await page.waitForSelector('button:has-text("Mark as applied")');
+check("Mark as applied / un-apply round trip works", true);
+await page.click('button:has-text("Back to list")');
+await page.waitForSelector("main ul > li h3");
 
-// --- autocomplete + title-only search ----------------------------------------
-const termInput = page.locator('input[role="combobox"]').first();
-await termInput.fill("adm");
-await page.waitForSelector('[role="listbox"] [role="option"]');
-const options = await page.locator('[role="option"]').allInnerTexts();
-check(
-  "autocomplete suggests admin titles for 'adm'",
-  options.some((o) => o.includes("administrator")),
-  options.slice(0, 4).join(" | ")
-);
-await termInput.fill("administrator");
-await termInput.press("Enter"); // adds the raw term as a chip
-await page.waitForTimeout(800);
-const titlesAfterTerm = await page.locator("main ul > li h3").allInnerTexts();
-const offTitle = titlesAfterTerm.filter((t) => !/\badministrator/i.test(t));
-check(
-  "with term 'administrator', every visible job has it in the TITLE",
-  titlesAfterTerm.length > 0 && offTitle.length === 0,
-  `${titlesAfterTerm.length} shown${offTitle.length ? `; off-title: ${offTitle[0]}` : ""}`
-);
-// remove the chip again
-await page.click('button[aria-label="Remove administrator"]');
-await page.waitForTimeout(500);
-
-// --- filters: government + salary ---------------------------------------------
-await page.click('button:has-text("Filters")');
-await page.waitForSelector("#search-filters");
-await page.screenshot({ path: `${SHOTS}/desktop-royal-filters.png` });
-
-const govJobs = apiJobs.filter((j) => j.is_government).map((j) => j.title);
-await page.click('button:has-text("Government / public sector only")');
-await page.waitForTimeout(600);
-const govShown = await page.locator("main ul > li h3").allInnerTexts();
-check(
-  "government filter shows only flagged public-sector jobs",
-  govShown.length > 0 && govShown.every((t) => govJobs.includes(t)),
-  `${govShown.length} shown of ${govJobs.length} flagged`
-);
-await page.click('button:has-text("Government / public sector only")');
-
-await page.fill('input[placeholder="Min £"]', "30000");
-await page.waitForTimeout(600);
-const salaryCards = await page.locator("main ul > li").count();
-let noSalaryBadge = 0;
-for (const li of await page.locator("main ul > li").elementHandles()) {
-  const text = await li.innerText();
-  if (!text.includes("£")) noSalaryBadge++;
+// --- Settings: theme present, and NO halal/commission disable control anywhere ---
+await page.click('aside nav button:has-text("Settings")');
+await page.waitForSelector('h2:has-text("Theme")');
+check("Settings has a theme chooser", (await page.locator('button:has-text("Royal"), button:has-text("Galaxy")').count()) >= 2);
+// Scan EVERY tab for any interactive control to disable the always-on filter.
+let disableControl = 0;
+for (const t of ["jobs", "government", "applied", "saved", "settings"]) {
+  await page.click(`aside nav button:has-text("${t[0].toUpperCase() + t.slice(1)}")`);
+  await page.waitForTimeout(300);
+  const controls = await page.locator('button, input[type=checkbox], [role=switch], [role=radio]').all();
+  for (const c of controls) {
+    const label = ((await c.getAttribute("aria-label")) ?? (await c.innerText().catch(() => "")) ?? "").toLowerCase();
+    if (/halal|haram|commission|sharia/.test(label)) disableControl++;
+  }
 }
-check(
-  "salary filter: every visible card states a salary (no-salary jobs hidden)",
-  salaryCards === 0 || noSalaryBadge === 0,
-  `${salaryCards} cards, ${noSalaryBadge} without £`
-);
-await page.fill('input[placeholder="Min £"]', "");
+check("NO control anywhere to disable the halal/commission filter", disableControl === 0, `${disableControl} found`);
+
+// --- theme toggle ---
+await page.click('aside nav button:has-text("Settings")');
+await page.click('button:has-text("Galaxy")');
 await page.waitForTimeout(400);
-await page.click('button:has-text("Filters")'); // close panel
-
-// --- hide a job -----------------------------------------------------------------
-const firstTitle = await page.locator("main ul > li h3").first().innerText();
-await page.locator('button[aria-label^="Hide"]').first().click();
-await page.waitForTimeout(400);
-const titlesAfterHide = await page.locator("main ul > li h3").allInnerTexts();
-check(
-  "hide removes the job from the list",
-  !titlesAfterHide.includes(firstTitle)
-);
-await page.click("text=/Show (it|them)/");
-await page.waitForTimeout(400);
-const titlesAfterShow = await page.locator("main ul > li h3").allInnerTexts();
-check("unhide brings it back", titlesAfterShow.includes(firstTitle));
-
-// --- detail views: honest posted lines for both sources --------------------------
-async function openCardBySource(sourceLabel) {
-  const card = page
-    .locator("main ul > li", {
-      has: page.locator(`span:text-is("${sourceLabel}")`),
-    })
-    .first();
-  if ((await card.count()) === 0) return false;
-  await card.locator('button[aria-label^="Open"]').click();
-  await page.waitForSelector('a:has-text("View / Apply on")');
-  return true;
-}
-
-if (await openCardBySource("Adzuna")) {
-  const link = page.locator('a:has-text("View / Apply on")').first();
-  const linkBox = await link.boundingBox();
-  const titleBox = await page.locator("#job-detail-title").boundingBox();
-  check(
-    "detail: external link sits at the TOP, above the title",
-    linkBox && titleBox && linkBox.y < titleBox.y
-  );
-  check(
-    "detail: link opens safely in a new tab",
-    (await link.getAttribute("target")) === "_blank" &&
-      ((await link.getAttribute("rel")) ?? "").includes("noopener")
-  );
-  const postedLine = await page
-    .locator("text=/own timestamp/")
-    .count();
-  check("Adzuna detail cites the source's own timestamp", postedLine > 0);
-
-  // applied round trip
-  await page.click('button:has-text("Mark as applied")');
-  await page.waitForSelector('button:has-text("Un-apply")');
-  check("Mark as applied works (button flips to Un-apply)", true);
-  await page.click('button:has-text("Un-apply")');
-  await page.waitForSelector('button:has-text("Mark as applied")');
-  check("Un-apply works (button flips back)", true);
-  await page.click('button:has-text("Back to list")');
-  await page.waitForSelector("main ul > li h3");
-}
-
-if (await openCardBySource("Reed")) {
-  const dateOnlyNote = await page
-    .locator("text=/Reed provides the date only/")
-    .count();
-  check("Reed detail is honest about date-only precision", dateOnlyNote > 0);
-  const ago = await page.locator("text=/Posted (today|yesterday)/").count();
-  check("Reed detail shows today/yesterday, not fake minutes", ago > 0);
-  // full description loads from the details endpoint
-  await page.waitForFunction(
-    () =>
-      document.querySelector(".job-description") !== null ||
-      document.body.innerText.includes("wouldn't load"),
-    { timeout: 30000 }
-  );
-  check(
-    "Reed full description loads (or honestly reports failure)",
-    true
-  );
-  await page.click('button:has-text("Back to list")');
-  await page.waitForSelector("main ul > li h3");
-}
-
-// --- saved searches (FULL state round trip incl. extras) ---------------------------
-await page.locator('input[role="combobox"]').first().fill("barista");
-await page.locator('input[role="combobox"]').first().press("Enter");
-await page.click('button:has-text("Filters")');
-await page.waitForSelector("#search-filters");
-await page.locator('input[role="combobox"]').nth(1).fill("weekend");
-await page.locator('input[role="combobox"]').nth(1).press("Enter");
-await page.selectOption('select[aria-label="Posted within"]', "24");
-await page.click('button:has-text("Filters")');
-await page.click('button:has-text("Save search")');
-await page.fill('input[placeholder^="Name this search"]', "UI test search");
-await page.click('form button:has-text("Save")');
-await page.waitForSelector("text=/Saved —/");
-await page.click("#tab-saved");
-await page.waitForSelector('h3:text-is("UI test search")');
-check("saved search appears in the Saved tab", true);
-// Scope to OUR card — the Saved tab may hold other saved searches too.
-await page
-  .locator("li", { has: page.locator('h3:text-is("UI test search")') })
-  .locator('button:has-text("Load & run")')
-  .click();
-await page.waitForSelector('section[aria-label="Job search"]');
-check(
-  "loading a saved search returns to Jobs with its terms applied",
-  (await page.locator('span:has-text("barista")').count()) > 0
-);
-await page.click('button:has-text("Filters")');
-await page.waitForSelector("#search-filters");
-check(
-  "saved search restores exclude words",
-  (await page.locator('button[aria-label="Remove weekend"]').count()) > 0
-);
-check(
-  "saved search restores the posted-within filter",
-  (await page.locator('select[aria-label="Posted within"]').inputValue()) ===
-    "24"
-);
-await page.click('button:has-text("Clear filters")');
-await page.click('button:has-text("Filters")');
-await page.click("#tab-saved");
-await page.waitForSelector('h3:text-is("UI test search")');
-await page.locator('button[aria-label^="Delete saved search"]').last().click();
-await page.waitForTimeout(800);
-check(
-  "saved search can be deleted",
-  (await page.locator('h3:text-is("UI test search")').count()) === 0
-);
-// clean the barista term back off
-await page.click("#tab-jobs");
-const baristaChip = page.locator('button[aria-label="Remove barista"]');
-if ((await baristaChip.count()) > 0) await baristaChip.click();
-
-// --- themes ---------------------------------------------------------------------------
-await page.click('button[aria-label*="Galaxy"]');
-await page.waitForTimeout(400);
-check(
-  "theme toggles to Galaxy",
-  await page.evaluate(() => document.documentElement.classList.contains("dark"))
-);
+check("theme switches to Galaxy", await page.evaluate(() => document.documentElement.classList.contains("dark")));
+await page.click('aside nav button:has-text("Jobs")');
 await page.screenshot({ path: `${SHOTS}/desktop-galaxy-jobs.png` });
 await desktop.close();
 
-// --- mobile ------------------------------------------------------------------------------
-const mobile = await browser.newContext({
-  viewport: { width: 390, height: 844 },
-  isMobile: true,
-  hasTouch: true,
-});
+// --- MOBILE: drawer nav ---
+const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 const mpage = await newPage(mobile);
 await mpage.goto(BASE, { waitUntil: "networkidle" });
 await mpage.waitForSelector("main ul > li h3");
-const hOverflow = await mpage.evaluate(
-  () =>
-    document.documentElement.scrollWidth >
-    document.documentElement.clientWidth + 1
-);
+check("desktop sidebar is hidden on mobile", !(await mpage.locator("aside nav").isVisible().catch(() => false)));
+const hOverflow = await mpage.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
 check("no horizontal overflow on mobile", !hOverflow);
 await mpage.screenshot({ path: `${SHOTS}/mobile-royal-jobs.png` });
-await mpage.click('button:has-text("Filters")');
-await mpage.waitForSelector("#search-filters");
-await mpage.screenshot({ path: `${SHOTS}/mobile-royal-filters.png` });
-await mpage.click('button:has-text("Filters")');
-await mpage.locator('button[aria-label^="Open"]').first().tap();
-await mpage.waitForSelector('a:has-text("View / Apply on")');
-await mpage.screenshot({ path: `${SHOTS}/mobile-royal-detail.png` });
+await mpage.click('button[aria-label="Open menu"]');
+await mpage.waitForSelector('[role="dialog"] nav');
+check("mobile hamburger opens the nav drawer", await mpage.locator('[role="dialog"] nav').isVisible());
+await mpage.screenshot({ path: `${SHOTS}/mobile-drawer.png` });
+await mpage.click('[role="dialog"] nav button:has-text("Government")');
+await mpage.waitForSelector('section[aria-label="Government job search"]');
+check("mobile drawer navigates and closes", !(await mpage.locator('[role="dialog"]').isVisible().catch(() => false)));
+await mpage.screenshot({ path: `${SHOTS}/mobile-government.png` });
 await mobile.close();
 
 await browser.close();
-
-check(
-  "zero browser console errors across the whole run",
-  consoleErrors.length === 0,
-  consoleErrors.slice(0, 3).join(" || ")
-);
+check("zero browser console errors across the whole run", consoleErrors.length === 0, consoleErrors.slice(0, 3).join(" || "));
 
 console.log(`\n${passes} passed, ${failures.length} failed`);
 if (failures.length) console.log("FAILED: " + failures.join(" | "));

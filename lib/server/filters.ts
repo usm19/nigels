@@ -14,6 +14,10 @@ import "server-only";
 // results firmly within Birmingham.
 const BIRMINGHAM_WORD = /\bbirmingham\b/i;
 const B_POSTCODE_PATTERN = /\bB(\d{1,2})\s?(?:\d[A-Z]{2})?\b/gi;
+// There are Birminghams in the USA (Alabama, Michigan). The aggregator
+// sources (Jooble, JSearch) can occasionally surface them, so any clear
+// non-UK signal vetoes the match.
+const NON_UK = /\balabama\b|\bmichigan\b|united states|\bu\.?s\.?a\.?\b/i;
 
 function isBirminghamPostcodeDistrict(district: number): boolean {
   return (
@@ -28,11 +32,23 @@ export function isBirminghamLocation(
   locationText: string | null | undefined
 ): boolean {
   if (!locationText) return false;
+  if (NON_UK.test(locationText)) return false;
   if (BIRMINGHAM_WORD.test(locationText)) return true;
   for (const match of locationText.matchAll(B_POSTCODE_PATTERN)) {
     if (isBirminghamPostcodeDistrict(Number(match[1]))) return true;
   }
   return false;
+}
+
+/**
+ * Birmingham gate for the aggregator sources (Jooble, JSearch) whose
+ * structured location field is sparse or vague. We scan a combined haystack
+ * of every location/title/description clue for a Birmingham signal. This is
+ * looser than the precise Adzuna/Reed location filter, so it is honestly
+ * documented as such.
+ */
+export function mentionsBirmingham(...parts: Array<string | null | undefined>): boolean {
+  return isBirminghamLocation(parts.filter(Boolean).join(" | "));
 }
 
 // --- Remote / hybrid detection ---------------------------------------------

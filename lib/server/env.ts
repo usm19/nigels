@@ -10,6 +10,11 @@ function required(name: string): string {
   return value.trim();
 }
 
+function optional(name: string): string | null {
+  const value = process.env[name];
+  return value && value.trim() !== "" ? value.trim() : null;
+}
+
 export const env = {
   get adzunaAppId(): string {
     return required("ADZUNA_APP_ID");
@@ -25,5 +30,19 @@ export const env = {
   },
   get supabaseServiceRoleKey(): string {
     return required("SUPABASE_SERVICE_ROLE_KEY");
+  },
+  // New v3 sources are OPTIONAL — if a key is absent the source is simply
+  // skipped, so the app still runs on Adzuna + Reed alone.
+  get joobleApiKey(): string | null {
+    return optional("JOOBLE_API_KEY");
+  },
+  get jsearchApiKey(): string | null {
+    return optional("JSEARCH_API_KEY");
+  },
+  /** "openwebninja" (default) or "rapidapi" — selects endpoint + headers. */
+  get jsearchProvider(): "openwebninja" | "rapidapi" {
+    return optional("JSEARCH_PROVIDER") === "rapidapi"
+      ? "rapidapi"
+      : "openwebninja";
   },
 };

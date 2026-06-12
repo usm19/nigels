@@ -1,6 +1,13 @@
-// Client-side display filtering and sorting for the main search bar, plus
-// mapping between the search state and saved searches (the alerts table).
-import type { Alert, Job, SearchState, SortOption } from "./types";
+// Client-side display filtering and sorting for the search bars, plus mapping
+// between the search state and saved searches (the alerts table).
+import type {
+  Alert,
+  Job,
+  SearchScope,
+  SearchState,
+  SectorFilter,
+  SortOption,
+} from "./types";
 import { DEFAULT_SEARCH } from "./types";
 import {
   matchesAnyTerm,
@@ -19,13 +26,30 @@ function postedMs(job: Job): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
+/**
+ * Does the job belong in this tab's sector universe?
+ *  - "government" scope: government employers only.
+ *  - "jobs" scope: everything that is NOT government, narrowed by the
+ *    All / Public sector / Private sub-filter.
+ */
+function inSectorScope(job: Job, scope: SearchScope, sub: SectorFilter): boolean {
+  if (scope === "government") return job.sector === "government";
+  if (job.sector === "government") return false;
+  if (sub === "public_sector") return job.sector === "public_sector";
+  if (sub === "private") return job.sector === "private";
+  return true; // "all" = public + private
+}
+
 /** Apply every search filter to the (already fresh, active) job list. */
 export function applySearchFilters(
   jobs: Job[],
   s: SearchState,
-  nowMs: number
+  nowMs: number,
+  scope: SearchScope
 ): Job[] {
   const filtered = jobs.filter((job) => {
+    if (!inSectorScope(job, scope, s.sectorFilter)) return false;
+
     if (s.terms.length > 0) {
       const inTitle = matchesAnyTerm(job.title, s.terms);
       const inDescription =
@@ -39,15 +63,13 @@ export function applySearchFilters(
     }
     if (!matchesEmploymentTypes(job, s.employmentTypes)) return false;
     // Exactly one contract type is a real constraint. Selecting BOTH means
-    // "either is fine" and must not hide jobs whose contract type is unknown
-    // (Reed never states it unless the search itself was contract-filtered).
+    // "either is fine" and must not hide jobs whose contract type is unknown.
     if (
       s.contractTypes.length === 1 &&
       job.contract_type !== s.contractTypes[0]
     ) {
       return false;
     }
-    if (s.governmentOnly && !job.is_government) return false;
     if (
       s.experienceLevels.length > 0 &&
       (!job.experience_level ||
@@ -93,7 +115,7 @@ export function activeFilterCount(s: SearchState): number {
   if (s.employmentTypes.length > 0) n++;
   if (s.contractTypes.length > 0) n++;
   if (s.experienceLevels.length > 0) n++;
-  if (s.governmentOnly) n++;
+  if (s.sectorFilter !== "all") n++;
   if (s.salaryMin !== null || s.salaryMax !== null) n++;
   if (s.postedWithinHours !== null) n++;
   if (s.excludeTerms.length > 0) n++;
@@ -101,14 +123,14 @@ export function activeFilterCount(s: SearchState): number {
   return n;
 }
 
-// The filter state that has no dedicated column rides along as JSON in the
-// schema's free-text `keywords` column, so saved searches restore the FULL
-// search bar (exclude words, posted-within, description toggle, sort).
+// Filter state without a dedicated column rides along as JSON in the schema's
+// free-text `keywords` column, so saved searches restore the FULL search bar.
 interface SavedSearchExtras {
   exclude?: string[];
   postedWithinHours?: number | null;
   searchDescriptions?: boolean;
   sort?: SortOption;
+  sectorFilter?: SectorFilter;
 }
 
 /** Turn a saved search (alert row) back into search-bar state. */
@@ -123,12 +145,15 @@ export function searchFromAlert(alert: Alert): SearchState {
       // Unreadable extras — fall back to defaults.
     }
   } else if (raw) {
-    // Legacy/manual value: treat as comma-separated extra terms.
     keywordTerms = raw
       .split(",")
       .map((t) => t.trim().toLowerCase())
       .filter(Boolean);
   }
+  const sectorFilter: SectorFilter =
+    extras.sectorFilter === "public_sector" || extras.sectorFilter === "private"
+      ? extras.sectorFilter
+      : "all";
   return {
     ...DEFAULT_SEARCH,
     terms: [...new Set([...alert.tags, ...keywordTerms])],
@@ -141,10 +166,10 @@ export function searchFromAlert(alert: Alert): SearchState {
         ? extras.postedWithinHours
         : null,
     sort: extras.sort === "salary" ? "salary" : "newest",
+    sectorFilter,
     employmentTypes: alert.employment_types,
     contractTypes: alert.contract_types,
     experienceLevels: alert.experience_levels,
-    governmentOnly: alert.government_only,
     salaryMin: alert.salary_min,
     salaryMax: alert.salary_max,
   };
@@ -157,6 +182,7 @@ export function alertFieldsFromSearch(s: SearchState) {
     postedWithinHours: s.postedWithinHours,
     searchDescriptions: s.searchDescriptions,
     sort: s.sort,
+    sectorFilter: s.sectorFilter,
   };
   return {
     tags: s.terms,
@@ -164,7 +190,7 @@ export function alertFieldsFromSearch(s: SearchState) {
     employment_types: s.employmentTypes,
     contract_types: s.contractTypes,
     experience_levels: s.experienceLevels,
-    government_only: s.governmentOnly,
+    government_only: false,
     salary_min: s.salaryMin,
     salary_max: s.salaryMax,
   };

@@ -1,6 +1,6 @@
 "use client";
 
-import { RefreshCw } from "lucide-react";
+import { Menu, RefreshCw } from "lucide-react";
 import { clockTime, refreshTimer } from "@/lib/format";
 import { useNow } from "./TickContext";
 import { Logo } from "./Logo";
@@ -12,6 +12,8 @@ interface TopBarProps {
   refreshing: boolean;
   cooldownUntil: number;
   onRefresh: () => void;
+  /** Opens the mobile navigation drawer. */
+  onMenuClick: () => void;
 }
 
 export function TopBar({
@@ -19,6 +21,7 @@ export function TopBar({
   refreshing,
   cooldownUntil,
   onRefresh,
+  onMenuClick,
 }: TopBarProps) {
   const now = useNow();
   const mounted = now !== 0;
@@ -40,7 +43,15 @@ export function TopBar({
 
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-background/85 backdrop-blur-md">
-      <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3">
+      <div className="flex items-center gap-3 px-4 py-3">
+        <button
+          type="button"
+          onClick={onMenuClick}
+          aria-label="Open menu"
+          className="flex h-11 w-11 items-center justify-center rounded-xl border border-line text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink lg:hidden"
+        >
+          <Menu size={20} aria-hidden />
+        </button>
         <Logo />
         <div className="ml-auto flex items-center gap-2 sm:gap-3">
           <div className="hidden flex-col items-end leading-tight sm:flex">

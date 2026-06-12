@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { Job, JobDetailResponse } from "@/lib/types";
 import { getSupabase } from "@/lib/server/supabase";
+import { isExcluded } from "@/lib/server/exclude";
 import { fetchReedFullDescriptionHtml } from "@/lib/server/reed";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +36,11 @@ export async function GET(
       return NextResponse.json({ error: "Job not found." }, { status: 404 });
     }
     const job = data as Job;
+    // The always-on exclusion applies here too — an excluded job is never
+    // surfaced, even by direct id.
+    if (isExcluded(job)) {
+      return NextResponse.json({ error: "Job not found." }, { status: 404 });
+    }
 
     let fullDescriptionHtml: string | null = null;
     if (job.source === "reed") {

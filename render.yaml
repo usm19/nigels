@@ -19,3 +19,9 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: JOOBLE_API_KEY
+        sync: false
+      - key: JSEARCH_API_KEY
+        sync: false
+      - key: JSEARCH_PROVIDER
+        value: openwebninja

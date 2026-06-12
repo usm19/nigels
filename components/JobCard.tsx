@@ -5,6 +5,7 @@ import type { Job } from "@/lib/types";
 import {
   EXPERIENCE_LEVEL_LABELS,
   CONTRACT_TYPE_LABELS,
+  SOURCE_LABELS,
 } from "@/lib/types";
 import {
   contractTimeLabel,
@@ -13,7 +14,7 @@ import {
   timeAgo,
 } from "@/lib/format";
 import { useNow } from "./TickContext";
-import { Badge } from "./ui";
+import { Badge, sourceTone } from "./ui";
 
 interface JobCardProps {
   job: Job;
@@ -61,9 +62,13 @@ export function JobCard({ job, isNew, onOpen, onHide }: JobCardProps) {
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {isNew && <Badge tone="gold">NEW</Badge>}
-          <Badge tone={job.source === "adzuna" ? "brand" : "purple"}>
-            {job.source === "adzuna" ? "Adzuna" : "Reed"}
+          <Badge tone={sourceTone(job.source)}>
+            {SOURCE_LABELS[job.source]}
           </Badge>
+          {job.sector === "government" && <Badge tone="gold">Government</Badge>}
+          {job.sector === "public_sector" && (
+            <Badge tone="brand">Public sector</Badge>
+          )}
           {contractTime && <Badge tone="neutral">{contractTime}</Badge>}
           {job.contract_type && (
             <Badge tone="neutral">
@@ -75,7 +80,6 @@ export function JobCard({ job, isNew, onOpen, onHide }: JobCardProps) {
               {EXPERIENCE_LEVEL_LABELS[job.experience_level]}
             </Badge>
           )}
-          {job.is_government && <Badge tone="gold">Public sector</Badge>}
           {job.is_remote && <Badge tone="green">Remote</Badge>}
           {job.is_hybrid && <Badge tone="green">Hybrid</Badge>}
           {salary && <Badge tone="gold">{salary}</Badge>}

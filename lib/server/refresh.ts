@@ -2,6 +2,7 @@ import "server-only";
 import type {
   FetchedJob,
   Job,
+  JobSource,
   RefreshRequest,
   RefreshResponse,
   SourceHealth,
@@ -13,6 +14,11 @@ import { matchesAnyTerm, matchesEmploymentTypes } from "@/lib/match";
 import { getSupabase } from "./supabase";
 import { searchAdzuna } from "./adzuna";
 import { searchReed } from "./reed";
+import { searchJooble } from "./jooble";
+import { searchJSearch } from "./jsearch";
+import { isExcluded } from "./exclude";
+import { env } from "./env";
+import { canCallJSearch, recordJSearchCall } from "./jsearch-quota";
 import { londonTodayEpochDays, londonTodayStartIso } from "./time";
 
 // Live API calls are allowed at most once per MIN_LIVE_FETCH_GAP_MS. Within
@@ -27,7 +33,7 @@ let lastLiveFetchStartedAt = 0;
  * Turn the active search into a de-duplicated list of source queries.
  * Full/part-time go down to the APIs as flags; remote/hybrid become extra
  * search words plus keyword detection on the results; a single selected
- * contract type and any salary bounds ride along on every query.
+ * contract type, any salary bounds and the posted-within window ride along.
  */
 function buildQueryPlan(search: RefreshRequest): {
   plan: SourceQuery[];
@@ -61,6 +67,7 @@ function buildQueryPlan(search: RefreshRequest): {
         contractFlag,
         salaryMin: search.salaryMin,
         salaryMax: search.salaryMax,
+        postedWithinHours: search.postedWithinHours,
       });
     }
   }
@@ -73,11 +80,10 @@ function buildQueryPlan(search: RefreshRequest): {
 
 /**
  * The storage gate for a fetched job:
- *  - TITLE-ONLY term matching (descriptions only when explicitly enabled) —
- *    the APIs' own keyword search matches descriptions too broadly.
+ *  - TITLE-ONLY term matching (descriptions only when explicitly enabled).
  *  - Employment-type gate (OR semantics).
- *  - Skip jobs already past the 24-hour window since their REAL posting time
- *    (Reed returns plenty of week-old listings; storing them is pointless).
+ *  - ALWAYS-ON halal + commission-only exclusion (fetch-time pass).
+ *  - Skip jobs already past the 24-hour window since their REAL posting time.
  */
 function passesSearchGate(
   job: FetchedJob,
@@ -85,6 +91,9 @@ function passesSearchGate(
   nowMs: number,
   todayEpochDays: number
 ): boolean {
+  // Permanent, non-negotiable exclusion — nothing excluded is ever stored.
+  if (isExcluded(job)) return false;
+
   if (search.terms.length > 0) {
     const inTitle = matchesAnyTerm(job.title, search.terms);
     const inDescription =
@@ -109,8 +118,10 @@ function passesSearchGate(
   return true;
 }
 
+type SourceFn = (q: SourceQuery) => Promise<FetchedJob[]>;
+
 async function runSource(
-  source: "adzuna" | "reed",
+  fn: SourceFn,
   plan: SourceQuery[],
   search: RefreshRequest,
   nowMs: number,
@@ -121,8 +132,7 @@ async function runSource(
   // Queries run one after another (not in parallel) to be gentle on each API.
   for (const q of plan) {
     try {
-      const results =
-        source === "adzuna" ? await searchAdzuna(q) : await searchReed(q);
+      const results = await fn(q);
       for (const job of results) {
         if (passesSearchGate(job, search, nowMs, todayEpochDays)) {
           collected.push(job);
@@ -143,17 +153,70 @@ async function runSource(
   return { jobs: collected, health };
 }
 
+/** Stable key for the JSearch per-query cooldown. */
+function jsearchQueryKey(search: RefreshRequest): string {
+  return [
+    search.terms.slice().sort().join("+") || "_all",
+    search.employmentTypes.slice().sort().join(","),
+    search.contractTypes.slice().sort().join(","),
+    search.salaryMin ?? "",
+    search.salaryMax ?? "",
+    search.postedWithinHours ?? "",
+  ].join("|");
+}
+
+/**
+ * JSearch is quota-scarce (200/month hard limit). We only call it when there's
+ * a real search term, and only when the persistent quota guard allows it.
+ * Between calls, JSearch jobs already in the database keep showing.
+ */
+async function runJSearch(
+  plan: SourceQuery[],
+  search: RefreshRequest,
+  nowMs: number,
+  todayEpochDays: number
+): Promise<{ jobs: FetchedJob[]; health: SourceHealth }> {
+  if (!env.jsearchApiKey || search.terms.length === 0) {
+    return { jobs: [], health: "skipped" };
+  }
+  const decision = await canCallJSearch(jsearchQueryKey(search), nowMs);
+  if (!decision.allowed) {
+    return { jobs: [], health: "skipped" };
+  }
+  // ONE request per allowed call — use the first planned query only.
+  const q = plan[0];
+  try {
+    const results = await searchJSearch(q);
+    await recordJSearchCall(jsearchQueryKey(search), nowMs);
+    const kept = results.filter((job) =>
+      passesSearchGate(job, search, nowMs, todayEpochDays)
+    );
+    return { jobs: kept, health: "ok" };
+  } catch {
+    return { jobs: [], health: "error" };
+  }
+}
+
 function describeSourceProblems(status: SourceStatus): string | null {
-  const down: string[] = [];
-  if (status.adzuna === "error") down.push("Adzuna");
-  if (status.reed === "error") down.push("Reed");
-  if (down.length === 2) {
-    return "Couldn't reach Adzuna or Reed just now — showing your most recent results.";
+  const down = (Object.keys(status) as JobSource[]).filter(
+    (s) => status[s] === "error"
+  );
+  const labels: Record<JobSource, string> = {
+    adzuna: "Adzuna",
+    reed: "Reed",
+    jooble: "Jooble",
+    jsearch: "JSearch",
+  };
+  if (down.length >= 3) {
+    return "Couldn't reach most job sources just now — showing your most recent results.";
   }
-  if (down.length === 1) {
-    return `Couldn't reach ${down[0]} just now — its jobs may be missing from this refresh.`;
+  if (down.length > 0) {
+    return `Couldn't reach ${down.map((s) => labels[s]).join(" or ")} just now — showing everything else plus your most recent results.`;
   }
-  if (status.adzuna === "partial" || status.reed === "partial") {
+  const partial = (Object.keys(status) as JobSource[]).some(
+    (s) => status[s] === "partial"
+  );
+  if (partial) {
     return "Some searches didn't complete — results may be slightly incomplete this round.";
   }
   return null;
@@ -162,8 +225,8 @@ function describeSourceProblems(status: SourceStatus): string | null {
 /**
  * Remove active jobs that are past the 24-hour window since their REAL
  * posting time. Three passes because the rule differs by precision:
- *  1. Exact timestamps (Adzuna): older than now − 24h.
- *  2. Date-only / all Reed rows: dated yesterday or earlier (London time).
+ *  1. Exact timestamps: older than now − 24h.
+ *  2. Date-only rows: dated yesterday or earlier (London time).
  *  3. No posting time at all: fall back to first_seen_at.
  * Applied jobs are always exempt.
  */
@@ -214,15 +277,10 @@ async function removeExpiredJobs(): Promise<number> {
 }
 
 /**
- * The heart of Nigel's. The Refresh button re-runs the ACTIVE SEARCH:
- *  1. Build a query plan from the search-bar state.
- *  2. Query Adzuna + Reed (Birmingham only, small radius, fresh-first).
- *  3. Birmingham post-filter + title-only term gate + employment gate.
- *  4. De-dupe by (source, source_job_id); insert new rows only — existing
- *     rows keep their first_seen_at, status and applied_at.
- *  5. Delete active jobs past 24h since their REAL posting time (applied exempt).
- *  6. Return everything left, newest-posted first, plus the ids that are new
- *     in this refresh (for the NEW badge).
+ * The heart of Nigel's. The Refresh button re-runs the ACTIVE SEARCH against
+ * Adzuna, Reed, Jooble (every refresh) and JSearch (quota-guarded). Results
+ * are Birmingham-only, title-matched, halal/commission-filtered, deduped, and
+ * stored; existing rows keep their first_seen_at / status / applied_at.
  */
 export async function runRefresh(
   search: RefreshRequest
@@ -235,7 +293,12 @@ export async function runRefresh(
   let live = false;
   let newJobs = 0;
   const newKeys = new Set<string>();
-  let sourceStatus: SourceStatus = { adzuna: "skipped", reed: "skipped" };
+  let sourceStatus: SourceStatus = {
+    adzuna: "skipped",
+    reed: "skipped",
+    jooble: "skipped",
+    jsearch: "skipped",
+  };
 
   const withinCooldown =
     startedAt - lastLiveFetchStartedAt < MIN_LIVE_FETCH_GAP_MS;
@@ -253,17 +316,32 @@ export async function runRefresh(
       );
     }
 
-    const [adzunaRun, reedRun] = await Promise.all([
-      runSource("adzuna", plan, search, startedAt, todayEpochDays),
-      runSource("reed", plan, search, startedAt, todayEpochDays),
+    const joobleEnabled = env.joobleApiKey !== null;
+    const [adzunaRun, reedRun, joobleRun, jsearchRun] = await Promise.all([
+      runSource(searchAdzuna, plan, search, startedAt, todayEpochDays),
+      runSource(searchReed, plan, search, startedAt, todayEpochDays),
+      joobleEnabled
+        ? runSource(searchJooble, plan, search, startedAt, todayEpochDays)
+        : Promise.resolve({ jobs: [], health: "skipped" as SourceHealth }),
+      runJSearch(plan, search, startedAt, todayEpochDays),
     ]);
-    sourceStatus = { adzuna: adzunaRun.health, reed: reedRun.health };
+    sourceStatus = {
+      adzuna: adzunaRun.health,
+      reed: reedRun.health,
+      jooble: joobleRun.health,
+      jsearch: jsearchRun.health,
+    };
     const problem = describeSourceProblems(sourceStatus);
     if (problem) notes.push(problem);
 
-    // De-dupe within this refresh.
+    // De-dupe within this refresh (keep first occurrence of each source id).
     const unique = new Map<string, FetchedJob>();
-    for (const job of [...adzunaRun.jobs, ...reedRun.jobs]) {
+    for (const job of [
+      ...adzunaRun.jobs,
+      ...reedRun.jobs,
+      ...joobleRun.jobs,
+      ...jsearchRun.jobs,
+    ]) {
       const key = `${job.source}::${job.source_job_id}`;
       if (!unique.has(key)) unique.set(key, job);
     }
@@ -287,9 +365,8 @@ export async function runRefresh(
       newJobs = newKeys.size;
 
       // Upsert deliberately omits id, first_seen_at, status and applied_at:
-      // new rows get the database defaults (first_seen_at = now()), while
-      // existing rows keep their original first-seen clock and applied
-      // state — only the descriptive fields are refreshed.
+      // new rows get the database defaults; existing rows keep their original
+      // first-seen clock and applied state — only descriptive fields refresh.
       const payload = [...unique.values()];
       for (let i = 0; i < payload.length; i += 400) {
         const chunk = payload.slice(i, i + 400);
@@ -313,7 +390,9 @@ export async function runRefresh(
   if (jobsError) {
     throw new Error(`Could not load jobs: ${jobsError.message}`);
   }
-  const jobs = (jobRows ?? []) as Job[];
+  // Read-time exclusion pass — the always-on filter's safety net, in case any
+  // pre-filter rows linger in the database.
+  const jobs = ((jobRows ?? []) as Job[]).filter((j) => !isExcluded(j));
 
   const newJobIds = jobs
     .filter((j) => newKeys.has(`${j.source}::${j.source_job_id}`))

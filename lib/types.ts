@@ -1,10 +1,32 @@
 // Shared types for Nigel's. Safe to import from both server and client code.
 
-export type JobSource = "adzuna" | "reed";
+export const JOB_SOURCES = ["adzuna", "reed", "jooble", "jsearch"] as const;
+export type JobSource = (typeof JOB_SOURCES)[number];
 export type JobStatus = "active" | "applied";
 
-/** Whether the source gave a full timestamp (Adzuna) or just a date (Reed). */
+export const SOURCE_LABELS: Record<JobSource, string> = {
+  adzuna: "Adzuna",
+  reed: "Reed",
+  jooble: "Jooble",
+  jsearch: "JSearch",
+};
+
+/** Whether the source gave a full timestamp or just a date. */
 export type PostedTimePrecision = "exact" | "date_only";
+
+/** Three-way employer classification. */
+export const SECTORS = ["government", "public_sector", "private"] as const;
+export type Sector = (typeof SECTORS)[number];
+
+export const SECTOR_LABELS: Record<Sector, string> = {
+  government: "Government",
+  public_sector: "Public sector",
+  private: "Private",
+};
+
+/** Sub-filter used on the Jobs tab (which shows non-government jobs). */
+export const SECTOR_FILTERS = ["all", "public_sector", "private"] as const;
+export type SectorFilter = (typeof SECTOR_FILTERS)[number];
 
 export const EMPLOYMENT_TYPES = [
   "full_time",
@@ -54,7 +76,7 @@ export interface Job {
   salary_min: number | null;
   salary_max: number | null;
   /** The REAL posting time from the source site. Drives the displayed age
-   *  and the 24-hour lifecycle. Adzuna: full timestamp; Reed: date only. */
+   *  and the 24-hour lifecycle. */
   source_posted_date: string | null;
   posted_time_precision: PostedTimePrecision;
   /** When Nigel's first saw the job. ONLY used for the "NEW" badge —
@@ -63,6 +85,7 @@ export interface Job {
   status: JobStatus;
   applied_at: string | null;
   is_government: boolean;
+  sector: Sector;
   experience_level: ExperienceLevel | null;
   contract_type: ContractType | null;
 }
@@ -84,6 +107,7 @@ export interface FetchedJob {
   source_posted_date: string | null;
   posted_time_precision: PostedTimePrecision;
   is_government: boolean;
+  sector: Sector;
   experience_level: ExperienceLevel | null;
   contract_type: ContractType | null;
 }
@@ -106,8 +130,10 @@ export interface Alert {
 
 export type SortOption = "newest" | "salary";
 
-/** The full state of the main search bar. Drives both the server fetch
- *  (terms, employment, contract, salary) and the on-screen filtering. */
+/** Which tab a search bar belongs to — decides the sector universe. */
+export type SearchScope = "jobs" | "government";
+
+/** The full state of a search bar (one per scope: Jobs and Government). */
 export interface SearchState {
   /** Job-title terms (chips). Matched against the TITLE only, unless
    *  searchDescriptions is on. */
@@ -119,7 +145,8 @@ export interface SearchState {
   employmentTypes: EmploymentType[];
   contractTypes: ContractType[];
   experienceLevels: ExperienceLevel[];
-  governmentOnly: boolean;
+  /** Jobs-tab only: All (public+private) / Public sector / Private. */
+  sectorFilter: SectorFilter;
   salaryMin: number | null;
   salaryMax: number | null;
   /** Display filter using the REAL posting time. null = any time. */
@@ -134,7 +161,7 @@ export const DEFAULT_SEARCH: SearchState = {
   employmentTypes: [],
   contractTypes: [],
   experienceLevels: [],
-  governmentOnly: false,
+  sectorFilter: "all",
   salaryMin: null,
   salaryMax: null,
   postedWithinHours: null,
@@ -149,6 +176,8 @@ export interface RefreshRequest {
   contractTypes: ContractType[];
   salaryMin: number | null;
   salaryMax: number | null;
+  /** Used to map JSearch's date_posted window and conserve quota. */
+  postedWithinHours: number | null;
 }
 
 /** One concrete query against a job source (server-side fetch planning). */
@@ -158,14 +187,13 @@ export interface SourceQuery {
   contractFlag: ContractType | null;
   salaryMin: number | null;
   salaryMax: number | null;
+  /** null = any; otherwise the selected "posted within" window in hours. */
+  postedWithinHours: number | null;
 }
 
 export type SourceHealth = "ok" | "partial" | "error" | "skipped";
 
-export interface SourceStatus {
-  adzuna: SourceHealth;
-  reed: SourceHealth;
-}
+export type SourceStatus = Record<JobSource, SourceHealth>;
 
 export interface RefreshResponse {
   ok: boolean;
@@ -189,8 +217,8 @@ export interface JobDetailResponse {
   job: Job;
   /**
    * Sanitised HTML of the full description. Only present for Reed jobs
-   * (fetched live from Reed's details endpoint). Adzuna only ever provides
-   * a snippet via its API; the complete advert lives on the external page.
+   * (fetched live from Reed's details endpoint). Other sources show their
+   * stored description; Adzuna's is a snippet (full advert is external).
    */
   fullDescriptionHtml: string | null;
 }

@@ -5,6 +5,7 @@ import { CONTRACT_TYPES, EMPLOYMENT_TYPES } from "@/lib/types";
 import { isExpiredByPosting } from "@/lib/format";
 import { runRefresh } from "@/lib/server/refresh";
 import { getSupabase } from "@/lib/server/supabase";
+import { isExcluded } from "@/lib/server/exclude";
 import { londonTodayEpochDays } from "@/lib/server/time";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,7 @@ const RefreshBodySchema = z.object({
   contractTypes: z.array(z.enum(CONTRACT_TYPES)).max(2).catch([]),
   salaryMin: z.number().min(0).max(10_000_000).nullable().catch(null),
   salaryMax: z.number().min(0).max(10_000_000).nullable().catch(null),
+  postedWithinHours: z.number().min(0).max(8760).nullable().catch(null),
 });
 
 export async function POST(request: Request) {
@@ -44,7 +46,12 @@ export async function POST(request: Request) {
       newJobs: 0,
       newJobIds: [],
       removedJobs: 0,
-      sourceStatus: { adzuna: "error", reed: "error" },
+      sourceStatus: {
+        adzuna: "error",
+        reed: "error",
+        jooble: "error",
+        jsearch: "error",
+      },
       message:
         "Couldn't reach the sources just now — showing your most recent results.",
     };
@@ -58,7 +65,9 @@ export async function POST(request: Request) {
       const nowMs = Date.now();
       const todayDays = londonTodayEpochDays();
       fallback.jobs = ((data ?? []) as Job[]).filter(
-        (j) => j.status === "applied" || !isExpiredByPosting(j, nowMs, todayDays)
+        (j) =>
+          !isExcluded(j) &&
+          (j.status === "applied" || !isExpiredByPosting(j, nowMs, todayDays))
       );
     } catch {
       fallback.message =

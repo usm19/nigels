@@ -7,6 +7,7 @@ import type {
   JobDetailResponse,
   RefreshRequest,
   RefreshResponse,
+  SearchScope,
   SearchState,
 } from "@/lib/types";
 import { DEFAULT_SEARCH } from "@/lib/types";
@@ -18,16 +19,18 @@ import {
 } from "@/lib/search";
 import { TickProvider, useNow } from "./TickContext";
 import { TopBar } from "./TopBar";
-import { Tabs, type TabId } from "./Tabs";
+import { Sidebar, type TabId } from "./Sidebar";
 import { SearchBar } from "./SearchBar";
 import { JobCard } from "./JobCard";
 import { JobDetail } from "./JobDetail";
 import { SavedSearches } from "./SavedSearches";
+import { SettingsPanel } from "./SettingsPanel";
 import { EmptyState, Notice, SkeletonCards, btnPrimary } from "./ui";
 
 const REFRESH_COOLDOWN_MS = 12_000;
 const LAST_REFRESH_KEY = "nigels-last-refresh";
-const SEARCH_KEY = "nigels-search-v2";
+const JOBS_SEARCH_KEY = "nigels-search-jobs-v3";
+const GOV_SEARCH_KEY = "nigels-search-gov-v3";
 const HIDDEN_KEY = "nigels-hidden-v1";
 
 export default function NigelsApp() {
@@ -50,9 +53,9 @@ interface NoticeState {
   text: string;
 }
 
-function loadStoredSearch(): SearchState {
+function loadStoredSearch(key: string): SearchState {
   try {
-    const raw = localStorage.getItem(SEARCH_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return DEFAULT_SEARCH;
     const parsed = JSON.parse(raw) as Partial<SearchState>;
     return {
@@ -74,6 +77,7 @@ function refreshBody(s: SearchState): RefreshRequest {
     contractTypes: s.contractTypes,
     salaryMin: s.salaryMin,
     salaryMax: s.salaryMax,
+    postedWithinHours: s.postedWithinHours,
   };
 }
 
@@ -81,9 +85,11 @@ function AppShell() {
   const now = useNow();
 
   const [tab, setTab] = useState<TabId>("jobs");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [jobs, setJobs] = useState<Job[] | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
-  const [search, setSearch] = useState<SearchState>(DEFAULT_SEARCH);
+  const [jobsSearch, setJobsSearch] = useState<SearchState>(DEFAULT_SEARCH);
+  const [govSearch, setGovSearch] = useState<SearchState>(DEFAULT_SEARCH);
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<DetailState | null>(null);
@@ -93,14 +99,13 @@ function AppShell() {
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const [busyApplied, setBusyApplied] = useState(false);
   const [busySearches, setBusySearches] = useState(false);
-  // True once a refresh has delivered jobs, so a slow initial load can't
-  // overwrite fresher data.
   const jobsSupersededRef = useRef(false);
   const hydratedRef = useRef(false);
 
-  // First load: remembered search + hidden jobs + refresh time, then data.
+  // First load: remembered searches + hidden jobs + refresh time, then data.
   useEffect(() => {
-    setSearch(loadStoredSearch());
+    setJobsSearch(loadStoredSearch(JOBS_SEARCH_KEY));
+    setGovSearch(loadStoredSearch(GOV_SEARCH_KEY));
     try {
       const hidden = JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "[]");
       if (Array.isArray(hidden)) setHiddenIds(new Set(hidden.map(String)));
@@ -138,19 +143,26 @@ function AppShell() {
     })();
   }, []);
 
-  // Remember the search between visits.
+  // Remember each search between visits.
   useEffect(() => {
     if (!hydratedRef.current) return;
     try {
-      localStorage.setItem(SEARCH_KEY, JSON.stringify(search));
+      localStorage.setItem(JOBS_SEARCH_KEY, JSON.stringify(jobsSearch));
     } catch {
       // Fine.
     }
-  }, [search]);
+  }, [jobsSearch]);
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    try {
+      localStorage.setItem(GOV_SEARCH_KEY, JSON.stringify(govSearch));
+    } catch {
+      // Fine.
+    }
+  }, [govSearch]);
 
   // Persist hidden jobs, pruning ids that no longer exist. Pruning only
-  // happens against a NON-EMPTY job list — a failed load leaves jobs as []
-  // and must not wipe the user's hidden list.
+  // happens against a NON-EMPTY job list — a failed load must not wipe it.
   useEffect(() => {
     if (!hydratedRef.current || jobs === null) return;
     if (jobs.length > 0) {
@@ -170,9 +182,6 @@ function AppShell() {
 
   const handleRefresh = useCallback(
     async (override?: SearchState) => {
-      // The cooldown guard lives here (not just on the top-bar button) so
-      // every path that triggers a refresh respects it — with feedback, so
-      // no button ever appears to silently do nothing.
       if (refreshing) return;
       const cooldownLeft = cooldownUntil - Date.now();
       if (cooldownLeft > 0) {
@@ -183,7 +192,8 @@ function AppShell() {
         });
         return;
       }
-      const active = override ?? search;
+      const active =
+        override ?? (tab === "government" ? govSearch : jobsSearch);
       setRefreshing(true);
       setNotice(null);
       try {
@@ -195,8 +205,6 @@ function AppShell() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as RefreshResponse;
         jobsSupersededRef.current = true;
-        // A total failure returns ok=false with no jobs — keep what's on
-        // screen rather than wiping the list.
         setJobs((prev) =>
           !data.ok && data.jobs.length === 0 ? (prev ?? []) : data.jobs
         );
@@ -229,11 +237,9 @@ function AppShell() {
         setCooldownUntil(Date.now() + REFRESH_COOLDOWN_MS);
       }
     },
-    [refreshing, cooldownUntil, search]
+    [refreshing, cooldownUntil, tab, jobsSearch, govSearch]
   );
 
-  // Live views. Freshness uses the REAL posting time and re-checks every
-  // tick, so a job sliding past 24h-since-posting disappears in real time.
   const nowMs = now || Date.now();
   const freshActive = useMemo(
     () =>
@@ -242,15 +248,22 @@ function AppShell() {
       ),
     [jobs, nowMs]
   );
-  const matching = useMemo(
-    () => applySearchFilters(freshActive, search, nowMs),
-    [freshActive, search, nowMs]
+  const jobsMatching = useMemo(
+    () => applySearchFilters(freshActive, jobsSearch, nowMs, "jobs"),
+    [freshActive, jobsSearch, nowMs]
   );
-  const displayedJobs = useMemo(
-    () => matching.filter((j) => !hiddenIds.has(j.id)),
-    [matching, hiddenIds]
+  const govMatching = useMemo(
+    () => applySearchFilters(freshActive, govSearch, nowMs, "government"),
+    [freshActive, govSearch, nowMs]
   );
-  const hiddenCount = matching.length - displayedJobs.length;
+  const jobsDisplayed = useMemo(
+    () => jobsMatching.filter((j) => !hiddenIds.has(j.id)),
+    [jobsMatching, hiddenIds]
+  );
+  const govDisplayed = useMemo(
+    () => govMatching.filter((j) => !hiddenIds.has(j.id)),
+    [govMatching, hiddenIds]
+  );
   const appliedJobs = useMemo(
     () =>
       (jobs ?? [])
@@ -277,8 +290,6 @@ function AppShell() {
         const data = (await res.json()) as JobDetailResponse;
         setDetail((prev) => {
           if (!prev || prev.jobId !== job.id) return prev;
-          // Keep any apply/un-apply made while this fetch was in flight —
-          // the GET snapshot can be a few seconds stale.
           const freshJob = {
             ...data.job,
             status: prev.data.job.status,
@@ -361,6 +372,7 @@ function AppShell() {
   }
 
   async function saveSearch(name: string): Promise<boolean> {
+    const active = tab === "government" ? govSearch : jobsSearch;
     setBusySearches(true);
     try {
       const res = await fetch("/api/alerts", {
@@ -369,7 +381,7 @@ function AppShell() {
         body: JSON.stringify({
           name,
           is_active: true,
-          ...alertFieldsFromSearch(search),
+          ...alertFieldsFromSearch(active),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -393,7 +405,7 @@ function AppShell() {
 
   function loadSearch(alert: Alert) {
     const loaded = searchFromAlert(alert);
-    setSearch(loaded);
+    setJobsSearch(loaded);
     setTab("jobs");
     setDetail(null);
     void handleRefresh(loaded);
@@ -428,6 +440,89 @@ function AppShell() {
     />
   );
 
+  function renderJobList(
+    scope: SearchScope,
+    search: SearchState,
+    setSearch: (s: SearchState) => void,
+    matchingCount: number,
+    displayed: Job[]
+  ) {
+    const hiddenCount = matchingCount - displayed.length;
+    return (
+      <div className="space-y-5">
+        <SearchBar
+          scope={scope}
+          search={search}
+          onChange={setSearch}
+          onSaveSearch={saveSearch}
+          savingSearch={busySearches}
+          resultCount={jobs === null ? null : displayed.length}
+        />
+
+        {hiddenCount > 0 && (
+          <p className="text-sm text-ink-soft">
+            {hiddenCount} job{hiddenCount === 1 ? "" : "s"} hidden.{" "}
+            <button
+              type="button"
+              onClick={unhideAll}
+              className="font-medium text-brand underline underline-offset-4 hover:text-brand-2"
+            >
+              Show {hiddenCount === 1 ? "it" : "them"}
+            </button>
+          </p>
+        )}
+
+        {jobs === null && <SkeletonCards />}
+
+        {jobs !== null && matchingCount === 0 && (
+          <EmptyState
+            title={
+              scope === "government"
+                ? "No government jobs right now"
+                : "Nothing matches yet"
+            }
+            body={
+              scope === "government"
+                ? "Press Refresh and Nigel's will pull the newest Birmingham listings, then show any from government employers here."
+                : "Press Refresh and Nigel's will pull the newest Birmingham listings from Adzuna, Reed, Jooble and JSearch for your search."
+            }
+            action={
+              <button
+                type="button"
+                onClick={() => void handleRefresh()}
+                disabled={refreshing}
+                className={`${btnPrimary} min-h-11 px-5 py-2.5`}
+              >
+                Refresh now
+              </button>
+            }
+          />
+        )}
+
+        {displayed.length > 0 && (
+          <ul className="space-y-3">
+            {displayed.map((job) => (
+              <JobCard
+                key={job.id}
+                job={job}
+                isNew={newIds.has(job.id)}
+                onOpen={() => openJob(job)}
+                onHide={() => hideJob(job)}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
+  const counts = {
+    jobs: jobs === null ? null : jobsDisplayed.length,
+    government: jobs === null ? null : govDisplayed.length,
+    applied: jobs === null ? null : appliedJobs.length,
+    saved: alerts === null ? null : alerts.length,
+  };
+
   return (
     <div className="flex min-h-dvh flex-col">
       <TopBar
@@ -435,159 +530,92 @@ function AppShell() {
         refreshing={refreshing}
         cooldownUntil={cooldownUntil}
         onRefresh={() => void handleRefresh()}
+        onMenuClick={() => setMobileNavOpen(true)}
       />
 
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 pb-16">
-        <div className="mt-4">
-          <Tabs
-            tab={tab}
-            onChange={switchTab}
-            counts={{
-              jobs: jobs === null ? null : displayedJobs.length,
-              applied: jobs === null ? null : appliedJobs.length,
-              saved: alerts === null ? null : alerts.length,
-            }}
-          />
-        </div>
+      <div className="mx-auto flex w-full max-w-6xl flex-1">
+        <Sidebar
+          tab={tab}
+          counts={counts}
+          onChange={switchTab}
+          mobileOpen={mobileNavOpen}
+          onMobileClose={() => setMobileNavOpen(false)}
+        />
 
-        {notice && (
-          <div className="mt-4">
-            <Notice
-              kind={notice.kind}
-              text={notice.text}
-              onDismiss={() => setNotice(null)}
-            />
-          </div>
-        )}
+        <main className="min-w-0 flex-1 px-4 pb-16">
+          {notice && (
+            <div className="mt-4">
+              <Notice
+                kind={notice.kind}
+                text={notice.text}
+                onDismiss={() => setNotice(null)}
+              />
+            </div>
+          )}
 
-        <section
-          id={`panel-${tab}`}
-          role="tabpanel"
-          aria-labelledby={`tab-${tab}`}
-          className="mt-5"
-        >
-          {tab === "jobs" &&
-            (detailView ?? (
-              <div className="space-y-5">
-                <SearchBar
-                  search={search}
-                  onChange={setSearch}
-                  onSaveSearch={saveSearch}
-                  savingSearch={busySearches}
-                  resultCount={jobs === null ? null : displayedJobs.length}
-                />
+          <section className="mt-5">
+            {tab === "jobs" &&
+              (detailView ??
+                renderJobList(
+                  "jobs",
+                  jobsSearch,
+                  setJobsSearch,
+                  jobsMatching.length,
+                  jobsDisplayed
+                ))}
 
-                {hiddenCount > 0 && (
-                  <p className="text-sm text-ink-soft">
-                    {hiddenCount} job{hiddenCount === 1 ? "" : "s"} hidden.{" "}
-                    <button
-                      type="button"
-                      onClick={unhideAll}
-                      className="font-medium text-brand underline underline-offset-4 hover:text-brand-2"
-                    >
-                      Show {hiddenCount === 1 ? "it" : "them"}
-                    </button>
-                  </p>
-                )}
+            {tab === "government" &&
+              (detailView ??
+                renderJobList(
+                  "government",
+                  govSearch,
+                  setGovSearch,
+                  govMatching.length,
+                  govDisplayed
+                ))}
 
-                {jobs === null && <SkeletonCards />}
-
-                {jobs !== null && freshActive.length === 0 && (
-                  <EmptyState
-                    title="Nothing fresh right now"
-                    body="Press Refresh and Nigel's will pull the newest Birmingham listings for your search from Adzuna and Reed."
-                    action={
-                      <button
-                        type="button"
-                        onClick={() => void handleRefresh()}
-                        disabled={refreshing}
-                        className={`${btnPrimary} min-h-11 px-5 py-2.5`}
-                      >
-                        Refresh now
-                      </button>
-                    }
-                  />
-                )}
-
-                {jobs !== null &&
-                  freshActive.length > 0 &&
-                  matching.length === 0 && (
+            {tab === "applied" &&
+              (detailView ?? (
+                <>
+                  {jobs === null && <SkeletonCards />}
+                  {jobs !== null && appliedJobs.length === 0 && (
                     <EmptyState
-                      title="No jobs match this search"
-                      body={`${freshActive.length} fresh job${freshActive.length === 1 ? " is" : "s are"} stored but none fit the current terms and filters. Loosen them, or press Refresh to hunt for new matches.`}
-                      action={
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setSearch({
-                              ...DEFAULT_SEARCH,
-                              terms: search.terms,
-                              sort: search.sort,
-                            })
-                          }
-                          className={`${btnPrimary} min-h-11 px-5 py-2.5`}
-                        >
-                          Clear filters
-                        </button>
-                      }
+                      title="Nothing applied yet"
+                      body="When you mark a job as applied, it moves here and is kept safe — applied jobs never expire."
                     />
                   )}
+                  {appliedJobs.length > 0 && (
+                    <ul className="space-y-3">
+                      {appliedJobs.map((job) => (
+                        <JobCard
+                          key={job.id}
+                          job={job}
+                          isNew={false}
+                          onOpen={() => openJob(job)}
+                        />
+                      ))}
+                    </ul>
+                  )}
+                </>
+              ))}
 
-                {displayedJobs.length > 0 && (
-                  <ul className="space-y-3">
-                    {displayedJobs.map((job) => (
-                      <JobCard
-                        key={job.id}
-                        job={job}
-                        isNew={newIds.has(job.id)}
-                        onOpen={() => openJob(job)}
-                        onHide={() => hideJob(job)}
-                      />
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ))}
+            {tab === "saved" && (
+              <SavedSearches
+                alerts={alerts}
+                busy={busySearches}
+                onLoad={loadSearch}
+                onDelete={(alert) => void deleteSearch(alert)}
+              />
+            )}
 
-          {tab === "applied" &&
-            (detailView ?? (
-              <>
-                {jobs === null && <SkeletonCards />}
-                {jobs !== null && appliedJobs.length === 0 && (
-                  <EmptyState
-                    title="Nothing applied yet"
-                    body="When you mark a job as applied, it moves here and is kept safe — applied jobs never expire."
-                  />
-                )}
-                {appliedJobs.length > 0 && (
-                  <ul className="space-y-3">
-                    {appliedJobs.map((job) => (
-                      <JobCard
-                        key={job.id}
-                        job={job}
-                        isNew={false}
-                        onOpen={() => openJob(job)}
-                      />
-                    ))}
-                  </ul>
-                )}
-              </>
-            ))}
-
-          {tab === "saved" && (
-            <SavedSearches
-              alerts={alerts}
-              busy={busySearches}
-              onLoad={loadSearch}
-              onDelete={(alert) => void deleteSearch(alert)}
-            />
-          )}
-        </section>
-      </main>
+            {tab === "settings" && <SettingsPanel />}
+          </section>
+        </main>
+      </div>
 
       <footer className="border-t border-line py-5 text-center text-xs text-ink-soft">
-        Sources: Adzuna &amp; Reed · Birmingham only · Unapplied jobs leave 24
-        hours after they were posted
+        Sources: Adzuna · Reed · Jooble · JSearch — Birmingham only · Unapplied
+        jobs leave 24 hours after they were posted
       </footer>
     </div>
   );

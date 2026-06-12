@@ -3,7 +3,7 @@ import type { FetchedJob, SourceQuery } from "@/lib/types";
 import { env } from "./env";
 import { htmlToText, sanitizeJobHtml } from "./sanitize";
 import { detectHybrid, detectRemote, isBirminghamLocation } from "./filters";
-import { classifyExperience, detectGovernment } from "./classify";
+import { classifyExperience, classifySector } from "./classify";
 import { fetchJsonWithRetry } from "./http";
 
 // Reed Jobseeker API. Docs: https://www.reed.co.uk/developers/jobseeker
@@ -108,7 +108,8 @@ export async function searchReed(q: SourceQuery): Promise<FetchedJob[]> {
           : null,
       source_posted_date: parseReedDate(r.date),
       posted_time_precision: "date_only",
-      is_government: detectGovernment(company, title),
+      is_government: classifySector(company, title) === "government",
+      sector: classifySector(company, title),
       experience_level: classifyExperience(title),
       contract_type: q.contractFlag,
     });

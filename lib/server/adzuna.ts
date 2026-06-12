@@ -3,7 +3,7 @@ import type { FetchedJob, SourceQuery } from "@/lib/types";
 import { env } from "./env";
 import { htmlToText } from "./sanitize";
 import { detectHybrid, detectRemote, isBirminghamLocation } from "./filters";
-import { classifyExperience, detectGovernment } from "./classify";
+import { classifyExperience, classifySector } from "./classify";
 import { fetchJsonWithRetry } from "./http";
 
 // Adzuna GB job search. Docs: https://developer.adzuna.com/
@@ -49,6 +49,10 @@ export async function searchAdzuna(q: SourceQuery): Promise<FetchedJob[]> {
   if (q.contractFlag === "contract") params.set("contract", "1");
   if (q.salaryMin !== null) params.set("salary_min", String(Math.floor(q.salaryMin)));
   if (q.salaryMax !== null) params.set("salary_max", String(Math.ceil(q.salaryMax)));
+  // Tighten the window when the user wants very fresh jobs (we keep ≤24h anyway).
+  if (q.postedWithinHours !== null && q.postedWithinHours <= 24) {
+    params.set("max_days_old", "1");
+  }
 
   const data = (await fetchJsonWithRetry(
     `https://api.adzuna.com/v1/api/jobs/gb/search/1?${params.toString()}`,
@@ -114,7 +118,8 @@ export async function searchAdzuna(q: SourceQuery): Promise<FetchedJob[]> {
           : null,
       source_posted_date: posted,
       posted_time_precision: "exact",
-      is_government: detectGovernment(company, title),
+      is_government: classifySector(company, title) === "government",
+      sector: classifySector(company, title),
       experience_level: classifyExperience(title),
       contract_type: apiContractType ?? q.contractFlag,
     });

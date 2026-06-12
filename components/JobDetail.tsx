@@ -10,6 +10,7 @@ import type { Job } from "@/lib/types";
 import {
   CONTRACT_TYPE_LABELS,
   EXPERIENCE_LEVEL_LABELS,
+  SOURCE_LABELS,
 } from "@/lib/types";
 import {
   contractTimeLabel,
@@ -22,7 +23,7 @@ import {
   timeAgo,
 } from "@/lib/format";
 import { useNow } from "./TickContext";
-import { Badge, Spinner, btnGhost, btnPrimary } from "./ui";
+import { Badge, Spinner, sourceTone, btnGhost, btnPrimary } from "./ui";
 
 interface JobDetailProps {
   job: Job;
@@ -48,7 +49,7 @@ export function JobDetail({
 }: JobDetailProps) {
   const now = useNow();
   const mounted = now !== 0;
-  const sourceName = job.source === "adzuna" ? "Adzuna" : "Reed";
+  const sourceName = SOURCE_LABELS[job.source];
   const salary = formatSalary(job.salary_min, job.salary_max);
   const contractTime = contractTimeLabel(job.contract_time);
   const ago = mounted ? postedAgo(job, now) : null;
@@ -88,9 +89,11 @@ export function JobDetail({
         </p>
 
         <div className="mt-3 flex flex-wrap gap-1.5">
-          <Badge tone={job.source === "adzuna" ? "brand" : "purple"}>
-            {sourceName}
-          </Badge>
+          <Badge tone={sourceTone(job.source)}>{sourceName}</Badge>
+          {job.sector === "government" && <Badge tone="gold">Government</Badge>}
+          {job.sector === "public_sector" && (
+            <Badge tone="brand">Public sector</Badge>
+          )}
           {contractTime && <Badge tone="neutral">{contractTime}</Badge>}
           {job.contract_type && (
             <Badge tone="neutral">
@@ -102,7 +105,6 @@ export function JobDetail({
               {EXPERIENCE_LEVEL_LABELS[job.experience_level]}
             </Badge>
           )}
-          {job.is_government && <Badge tone="gold">Public sector</Badge>}
           {job.is_remote && <Badge tone="green">Remote</Badge>}
           {job.is_hybrid && <Badge tone="green">Hybrid</Badge>}
           {salary && <Badge tone="gold">{salary}</Badge>}
@@ -117,8 +119,8 @@ export function JobDetail({
                   <>
                     Posted <span className="font-medium text-ink">{ago ?? "…"}</span>{" "}
                     <span className="text-ink-soft/80">
-                      ({formatDateOnlyNice(job.source_posted_date)} — Reed
-                      provides the date only, not the time)
+                      ({formatDateOnlyNice(job.source_posted_date)} —{" "}
+                      {sourceName} provides the date only, not the time)
                     </span>
                   </>
                 ) : (
@@ -182,9 +184,9 @@ export function JobDetail({
           Job description
         </h2>
 
-        {job.source === "adzuna" && (
+        {(job.source === "adzuna" || job.source === "jooble") && (
           <p className="mt-2 rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-ink-soft">
-            This is Adzuna&rsquo;s preview of the advert — the complete
+            This is {sourceName}&rsquo;s preview of the advert — the complete
             description is on the original page, via the button above.
           </p>
         )}

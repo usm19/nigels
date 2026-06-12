@@ -1,6 +1,7 @@
 "use client";
 
 import { X } from "lucide-react";
+import type { JobSource } from "@/lib/types";
 
 // Shared building blocks + button styles so every control looks consistent.
 
@@ -32,6 +33,20 @@ const badgeTones: Record<BadgeTone, string> = {
   green: "bg-success/10 text-success border-success/30",
   neutral: "bg-surface-2 text-ink-soft border-line",
 };
+
+/** A distinct badge colour per job source. */
+export function sourceTone(source: JobSource): BadgeTone {
+  switch (source) {
+    case "adzuna":
+      return "brand";
+    case "reed":
+      return "purple";
+    case "jooble":
+      return "green";
+    case "jsearch":
+      return "neutral";
+  }
+}
 
 export function Badge({
   tone = "neutral",
