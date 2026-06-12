@@ -19,7 +19,6 @@ import { searchJSearch } from "./jsearch";
 import { isExcluded } from "./exclude";
 import { env } from "./env";
 import { canCallJSearch, recordJSearchCall } from "./jsearch-quota";
-import { resolveAdzunaJobs } from "./resolve-source";
 import { londonTodayEpochDays, londonTodayStartIso } from "./time";
 
 // Live API calls are allowed at most once per MIN_LIVE_FETCH_GAP_MS. Within
@@ -278,24 +277,6 @@ async function removeExpiredJobs(): Promise<number> {
   }
   removed += unknown.data?.length ?? 0;
 
-  // Safety cap for Adzuna. Adzuna re-stamps aggregated jobs with its crawl
-  // time, so a stale advert it keeps re-listing can otherwise claim to be
-  // "today" indefinitely. We never trust an Adzuna row to live longer than 24h
-  // from when WE first saw it (first_seen_at is preserved across refreshes).
-  // Reed-matched jobs have already become 'reed' rows and are unaffected;
-  // applied jobs are exempt (status = active filter).
-  const adzunaCap = await sb
-    .from("jobs")
-    .delete()
-    .eq("status", "active")
-    .eq("source", "adzuna")
-    .lt("first_seen_at", exactCutoffIso)
-    .select("id");
-  if (adzunaCap.error) {
-    throw new Error(`Could not clean up old jobs: ${adzunaCap.error.message}`);
-  }
-  removed += adzunaCap.data?.length ?? 0;
-
   return removed;
 }
 
@@ -357,27 +338,11 @@ export async function runRefresh(
     const problem = describeSourceProblems(sourceStatus);
     if (problem) notes.push(problem);
 
-    // Adzuna is an aggregator: many of its results are jobs that also live on
-    // Reed, stamped with Adzuna's CRAWL time, not the real posting time. Truth-
-    // check each against Reed (matched by title + employer): matches adopt
-    // Reed's real date (stale ones dropped), everything else is kept but demoted
-    // to honest day-level. reedRun.jobs lets us match for free before spending
-    // any Reed look-ups.
-    const adzunaJobs = await resolveAdzunaJobs(
-      adzunaRun.jobs,
-      reedRun.jobs,
-      todayEpochDays,
-      reedRun.health
-    );
-
     // De-dupe within this refresh (keep first occurrence of each source id).
-    // Re-cast Reed-backed Adzuna jobs now share Reed's (source, id), so they
-    // collapse together with anything from the direct Reed fetch — reedRun.jobs
-    // go FIRST so the real Reed row (richer description) wins any collision.
     const unique = new Map<string, FetchedJob>();
     for (const job of [
+      ...adzunaRun.jobs,
       ...reedRun.jobs,
-      ...adzunaJobs,
       ...joobleRun.jobs,
       ...jsearchRun.jobs,
     ]) {
@@ -436,9 +401,6 @@ export async function runRefresh(
   const newJobIds = jobs
     .filter((j) => newKeys.has(`${j.source}::${j.source_job_id}`))
     .map((j) => j.id);
-  // Report the number of new jobs the user can actually SEE: a job stored this
-  // refresh but immediately expired (or excluded) shouldn't inflate the count.
-  newJobs = newJobIds.length;
 
   return {
     ok: true,

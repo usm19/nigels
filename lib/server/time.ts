@@ -15,20 +15,6 @@ export function londonTodayYmd(): string {
   return LONDON_DATE.format(new Date());
 }
 
-/**
- * Normalise an instant to midnight UTC of ITS Europe/London calendar date,
- * e.g. "2026-06-13T00:30:00+01:00" (00:30 London) → "2026-06-13T00:00:00.000Z".
- * Date-only stamps across Nigel's are stored this way (see reed.ts), so the UTC
- * date parts equal the London date. Demoting an Adzuna timestamp to date-only
- * must use this, or a BST job in the 00:00–01:00 window lands on the previous
- * UTC day and is wrongly dropped/mis-displayed.
- */
-export function londonDateMidnightUtcIso(instantIso: string): string | null {
-  const ms = Date.parse(instantIso);
-  if (Number.isNaN(ms)) return null;
-  return `${LONDON_DATE.format(new Date(ms))}T00:00:00.000Z`;
-}
-
 /** Days since epoch for London's current calendar date. */
 export function londonTodayEpochDays(): number {
   return Math.floor(Date.parse(`${londonTodayYmd()}T00:00:00.000Z`) / 86_400_000);
