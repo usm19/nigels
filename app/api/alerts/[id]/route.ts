@@ -21,7 +21,7 @@ const AlertPatchSchema = z
       .array(z.enum(EMPLOYMENT_TYPES))
       .max(4)
       .transform((types) => [...new Set(types)]),
-    keywords: z.string().trim().max(300).nullable(),
+    keywords: z.string().trim().max(2000).nullable(),
     salary_min: z.number().min(0).max(10_000_000).nullable(),
     salary_max: z.number().min(0).max(10_000_000).nullable(),
     government_only: z.boolean(),

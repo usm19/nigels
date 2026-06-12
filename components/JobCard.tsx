@@ -40,8 +40,9 @@ export function JobCard({ job, isNew, onOpen, onHide }: JobCardProps) {
   const contractTime = contractTimeLabel(job.contract_time);
 
   return (
-    <li className="relative list-none" data-job-id={job.id}>
-      <div className="card-shadow group rounded-2xl border border-line bg-surface p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-gold-bright/50 sm:p-5">
+    // `group` lives on the li so hover works through the stretched button.
+    <li className="group relative list-none" data-job-id={job.id}>
+      <div className="card-shadow rounded-2xl border border-line bg-surface p-4 transition-all duration-200 group-hover:-translate-y-0.5 group-hover:border-gold-bright/50 sm:p-5">
         <div className="flex items-start justify-between gap-3">
           <h3 className="font-display text-lg font-semibold text-ink transition-colors group-hover:text-brand sm:text-xl">
             {job.title}

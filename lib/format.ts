@@ -27,8 +27,27 @@ export function effectivePrecision(job: {
 
 // --- Calendar-day arithmetic for date-only sources ---------------------------
 
-/** Days since epoch for the LOCAL calendar date of the given moment. */
+let londonFormatter: Intl.DateTimeFormat | null = null;
+
+/**
+ * Days since epoch for Birmingham's (Europe/London) calendar date — pinned to
+ * London so the browser always agrees with the server about what "today"
+ * means, no matter what timezone the device is set to.
+ */
 export function localTodayEpochDays(nowMs: number): number {
+  try {
+    londonFormatter ??= new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/London",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const ymd = londonFormatter.format(new Date(nowMs));
+    const ms = Date.parse(`${ymd}T00:00:00.000Z`);
+    if (!Number.isNaN(ms)) return Math.floor(ms / 86_400_000);
+  } catch {
+    // Very old runtime without timezone data — fall back to the device clock.
+  }
   const d = new Date(nowMs);
   return Math.floor(
     Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000
@@ -169,6 +188,21 @@ export function formatDateNice(iso: string): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * Format a DATE-ONLY stamp (stored at midnight UTC) without timezone
+ * shifting — naive local formatting would show the previous day on devices
+ * west of UTC.
+ */
+export function formatDateOnlyNice(iso: string): string {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return "";
+  const d = new Date(ms);
+  return format(
+    new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
+    "d MMM yyyy"
+  );
 }
 
 export function formatDateTimeNice(iso: string): string {

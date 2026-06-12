@@ -2,10 +2,14 @@ import "server-only";
 
 const RETRY_DELAY_MS = 800;
 
+/** A response that must NOT be retried (4xx — retrying never helps, and
+ *  re-sending on a 429 would hammer a source that is already throttling). */
+class NoRetryError extends Error {}
+
 /**
  * Fetch JSON with one automatic retry on transient failures (5xx or network
  * errors) — Adzuna in particular throws the odd 503. 4xx responses fail
- * immediately: retrying a bad request would never help.
+ * immediately.
  */
 export async function fetchJsonWithRetry(
   url: string,
@@ -24,15 +28,17 @@ export async function fetchJsonWithRetry(
         cache: "no-store",
         signal: AbortSignal.timeout(timeoutMs),
       });
-      if (res.status >= 500 && attempt === 0) {
+      if (res.status >= 500) {
         lastError = new Error(`${sourceName} responded with HTTP ${res.status}`);
+        if (attempt > 0) break;
         continue;
       }
       if (!res.ok) {
-        throw new Error(`${sourceName} responded with HTTP ${res.status}`);
+        throw new NoRetryError(`${sourceName} responded with HTTP ${res.status}`);
       }
       return await res.json();
     } catch (error) {
+      if (error instanceof NoRetryError) throw error;
       lastError = error;
       if (attempt > 0) break;
     }

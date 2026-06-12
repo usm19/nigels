@@ -15,6 +15,7 @@ import {
   contractTimeLabel,
   effectivePrecision,
   formatDateNice,
+  formatDateOnlyNice,
   formatDateTimeNice,
   formatSalary,
   postedAgo,
@@ -116,8 +117,8 @@ export function JobDetail({
                   <>
                     Posted <span className="font-medium text-ink">{ago ?? "…"}</span>{" "}
                     <span className="text-ink-soft/80">
-                      ({formatDateNice(job.source_posted_date)} — Reed provides
-                      the date only, not the time)
+                      ({formatDateOnlyNice(job.source_posted_date)} — Reed
+                      provides the date only, not the time)
                     </span>
                   </>
                 ) : (

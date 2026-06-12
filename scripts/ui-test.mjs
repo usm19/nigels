@@ -71,20 +71,33 @@ if (newestExact) {
   const card = page
     .locator(`li[data-job-id="${newestExact.id}"]`)
     .first();
-  const corner = await card.locator("span.text-gold").first().innerText();
-  const shownSecs = parseAgeSeconds(corner);
-  // Adzuna occasionally stamps `created` slightly in the future; the app
-  // clamps those to "just now", so the expected display is max(0, realAge).
+  const corner = (await card.locator("span.text-gold").first().innerText()).trim();
+  // Mirror the app's display buckets exactly: seconds < 1 min, then whole
+  // minutes < 1 h, then whole hours. Adzuna occasionally stamps `created`
+  // in the future; those clamp to "just now".
+  const fmt = (secs) => {
+    const s = Math.max(0, secs);
+    if (s < 60) return s <= 5 ? "just now" : `${s} seconds ago`;
+    const m = Math.floor(s / 60);
+    if (m === 1) return "1 minute ago";
+    if (m < 60) return `${m} minutes ago`;
+    const h = Math.floor(m / 60);
+    if (h === 1) return "1 hour ago";
+    if (h < 24) return `${h} hours ago`;
+    return "1 day ago";
+  };
   const realSecs = Math.floor(
     (Date.now() - Date.parse(newestExact.source_posted_date)) / 1000
   );
-  const expectedSecs = Math.max(0, realSecs);
-  const closeEnough =
-    shownSecs !== null && Math.abs(shownSecs - expectedSecs) <= 90;
+  const acceptable = new Set([fmt(realSecs - 60), fmt(realSecs), fmt(realSecs + 60)]);
+  // Seconds-range values drift between render and read — accept any seconds text.
+  const ok =
+    acceptable.has(corner) ||
+    (realSecs < 120 && /^(just now|\d+ seconds ago|1 minute ago)$/.test(corner));
   check(
-    "Adzuna card age matches its real `created` timestamp (±90s)",
-    closeEnough,
-    `shown "${corner}" vs real ${Math.floor(realSecs / 60)}m`
+    "Adzuna card age matches its real `created` timestamp (display-exact)",
+    ok,
+    `shown "${corner}" vs real ${Math.floor(realSecs / 60)}m (expected "${fmt(realSecs)}")`
   );
 }
 const reedJob = apiJobs.find(
@@ -281,9 +294,15 @@ if (await openCardBySource("Reed")) {
   await page.waitForSelector("main ul > li h3");
 }
 
-// --- saved searches ----------------------------------------------------------------
+// --- saved searches (FULL state round trip incl. extras) ---------------------------
 await page.locator('input[role="combobox"]').first().fill("barista");
 await page.locator('input[role="combobox"]').first().press("Enter");
+await page.click('button:has-text("Filters")');
+await page.waitForSelector("#search-filters");
+await page.locator('input[role="combobox"]').nth(1).fill("weekend");
+await page.locator('input[role="combobox"]').nth(1).press("Enter");
+await page.selectOption('select[aria-label="Posted within"]', "24");
+await page.click('button:has-text("Filters")');
 await page.click('button:has-text("Save search")');
 await page.fill('input[placeholder^="Name this search"]', "UI test search");
 await page.click('form button:has-text("Save")');
@@ -301,6 +320,19 @@ check(
   "loading a saved search returns to Jobs with its terms applied",
   (await page.locator('span:has-text("barista")').count()) > 0
 );
+await page.click('button:has-text("Filters")');
+await page.waitForSelector("#search-filters");
+check(
+  "saved search restores exclude words",
+  (await page.locator('button[aria-label="Remove weekend"]').count()) > 0
+);
+check(
+  "saved search restores the posted-within filter",
+  (await page.locator('select[aria-label="Posted within"]').inputValue()) ===
+    "24"
+);
+await page.click('button:has-text("Clear filters")');
+await page.click('button:has-text("Filters")');
 await page.click("#tab-saved");
 await page.waitForSelector('h3:text-is("UI test search")');
 await page.locator('button[aria-label^="Delete saved search"]').last().click();

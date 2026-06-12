@@ -1,6 +1,6 @@
 // Client-side display filtering and sorting for the main search bar, plus
 // mapping between the search state and saved searches (the alerts table).
-import type { Alert, Job, SearchState } from "./types";
+import type { Alert, Job, SearchState, SortOption } from "./types";
 import { DEFAULT_SEARCH } from "./types";
 import {
   matchesAnyTerm,
@@ -38,9 +38,12 @@ export function applySearchFilters(
       return false;
     }
     if (!matchesEmploymentTypes(job, s.employmentTypes)) return false;
+    // Exactly one contract type is a real constraint. Selecting BOTH means
+    // "either is fine" and must not hide jobs whose contract type is unknown
+    // (Reed never states it unless the search itself was contract-filtered).
     if (
-      s.contractTypes.length > 0 &&
-      (!job.contract_type || !s.contractTypes.includes(job.contract_type))
+      s.contractTypes.length === 1 &&
+      job.contract_type !== s.contractTypes[0]
     ) {
       return false;
     }
@@ -98,15 +101,46 @@ export function activeFilterCount(s: SearchState): number {
   return n;
 }
 
+// The filter state that has no dedicated column rides along as JSON in the
+// schema's free-text `keywords` column, so saved searches restore the FULL
+// search bar (exclude words, posted-within, description toggle, sort).
+interface SavedSearchExtras {
+  exclude?: string[];
+  postedWithinHours?: number | null;
+  searchDescriptions?: boolean;
+  sort?: SortOption;
+}
+
 /** Turn a saved search (alert row) back into search-bar state. */
 export function searchFromAlert(alert: Alert): SearchState {
-  const keywordTerms = (alert.keywords ?? "")
-    .split(",")
-    .map((t) => t.trim().toLowerCase())
-    .filter(Boolean);
+  let extras: SavedSearchExtras = {};
+  let keywordTerms: string[] = [];
+  const raw = (alert.keywords ?? "").trim();
+  if (raw.startsWith("{")) {
+    try {
+      extras = JSON.parse(raw) as SavedSearchExtras;
+    } catch {
+      // Unreadable extras — fall back to defaults.
+    }
+  } else if (raw) {
+    // Legacy/manual value: treat as comma-separated extra terms.
+    keywordTerms = raw
+      .split(",")
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean);
+  }
   return {
     ...DEFAULT_SEARCH,
     terms: [...new Set([...alert.tags, ...keywordTerms])],
+    excludeTerms: Array.isArray(extras.exclude)
+      ? extras.exclude.filter((t) => typeof t === "string")
+      : [],
+    searchDescriptions: extras.searchDescriptions === true,
+    postedWithinHours:
+      typeof extras.postedWithinHours === "number"
+        ? extras.postedWithinHours
+        : null,
+    sort: extras.sort === "salary" ? "salary" : "newest",
     employmentTypes: alert.employment_types,
     contractTypes: alert.contract_types,
     experienceLevels: alert.experience_levels,
@@ -118,9 +152,15 @@ export function searchFromAlert(alert: Alert): SearchState {
 
 /** The fields stored when saving the current search. */
 export function alertFieldsFromSearch(s: SearchState) {
+  const extras: SavedSearchExtras = {
+    exclude: s.excludeTerms,
+    postedWithinHours: s.postedWithinHours,
+    searchDescriptions: s.searchDescriptions,
+    sort: s.sort,
+  };
   return {
     tags: s.terms,
-    keywords: null as string | null,
+    keywords: JSON.stringify(extras),
     employment_types: s.employmentTypes,
     contract_types: s.contractTypes,
     experience_levels: s.experienceLevels,

@@ -165,6 +165,9 @@ export function TagInput({
           id={listId}
           role="listbox"
           aria-label="Suggested job titles"
+          // preventDefault so grabbing the list's scrollbar doesn't blur the
+          // input and close the dropdown mid-scroll.
+          onMouseDown={(e) => e.preventDefault()}
           className="card-shadow absolute z-30 mt-1.5 max-h-64 w-full overflow-auto rounded-xl border border-line bg-surface p-1"
         >
           {suggestions.map((s, i) => (

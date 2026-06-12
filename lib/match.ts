@@ -14,11 +14,15 @@ function normalise(text: string): string {
  * Word-boundary-aware, case-insensitive title matching. The term must start
  * at a word boundary, so "admin" matches "Admin Assistant" and
  * "Administrator" but NOT "badminton". Multi-word terms match as a phrase.
+ * Terms that START with a non-word character (".net developer", "+44 sales")
+ * skip the boundary anchor — \b before a symbol would otherwise make them
+ * unmatchable at the start of a title.
  */
 export function titleMatchesTerm(title: string, term: string): boolean {
   const t = normalise(term);
   if (!t) return false;
-  return new RegExp(`\\b${escapeRegExp(t)}`, "i").test(normalise(title));
+  const anchor = /^[a-z0-9_]/i.test(t) ? "\\b" : "";
+  return new RegExp(`${anchor}${escapeRegExp(t)}`, "i").test(normalise(title));
 }
 
 /** True if the text matches at least one of the terms. */

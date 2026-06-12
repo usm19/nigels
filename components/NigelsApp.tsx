@@ -148,17 +148,21 @@ function AppShell() {
     }
   }, [search]);
 
-  // Persist hidden jobs, pruning ids that no longer exist.
+  // Persist hidden jobs, pruning ids that no longer exist. Pruning only
+  // happens against a NON-EMPTY job list — a failed load leaves jobs as []
+  // and must not wipe the user's hidden list.
   useEffect(() => {
     if (!hydratedRef.current || jobs === null) return;
-    const valid = new Set(jobs.map((j) => j.id));
-    const pruned = [...hiddenIds].filter((id) => valid.has(id));
-    if (pruned.length !== hiddenIds.size) {
-      setHiddenIds(new Set(pruned));
-      return;
+    if (jobs.length > 0) {
+      const valid = new Set(jobs.map((j) => j.id));
+      const pruned = [...hiddenIds].filter((id) => valid.has(id));
+      if (pruned.length !== hiddenIds.size) {
+        setHiddenIds(new Set(pruned));
+        return;
+      }
     }
     try {
-      localStorage.setItem(HIDDEN_KEY, JSON.stringify(pruned));
+      localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hiddenIds]));
     } catch {
       // Fine.
     }
@@ -167,8 +171,18 @@ function AppShell() {
   const handleRefresh = useCallback(
     async (override?: SearchState) => {
       // The cooldown guard lives here (not just on the top-bar button) so
-      // every path that triggers a refresh respects it.
-      if (refreshing || Date.now() < cooldownUntil) return;
+      // every path that triggers a refresh respects it — with feedback, so
+      // no button ever appears to silently do nothing.
+      if (refreshing) return;
+      const cooldownLeft = cooldownUntil - Date.now();
+      if (cooldownLeft > 0) {
+        const secs = Math.ceil(cooldownLeft / 1000);
+        setNotice({
+          kind: "info",
+          text: `One moment — refresh unlocks in ${secs} second${secs === 1 ? "" : "s"}.`,
+        });
+        return;
+      }
       const active = override ?? search;
       setRefreshing(true);
       setNotice(null);
@@ -261,16 +275,22 @@ function AppShell() {
         const res = await fetch(`/api/jobs/${job.id}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as JobDetailResponse;
-        setDetail((prev) =>
-          prev && prev.jobId === job.id
-            ? {
-                jobId: job.id,
-                data,
-                loading: false,
-                failed: data.job.source === "reed" && !data.fullDescriptionHtml,
-              }
-            : prev
-        );
+        setDetail((prev) => {
+          if (!prev || prev.jobId !== job.id) return prev;
+          // Keep any apply/un-apply made while this fetch was in flight —
+          // the GET snapshot can be a few seconds stale.
+          const freshJob = {
+            ...data.job,
+            status: prev.data.job.status,
+            applied_at: prev.data.job.applied_at,
+          };
+          return {
+            jobId: job.id,
+            data: { job: freshJob, fullDescriptionHtml: data.fullDescriptionHtml },
+            loading: false,
+            failed: data.job.source === "reed" && !data.fullDescriptionHtml,
+          };
+        });
       } catch {
         setDetail((prev) =>
           prev && prev.jobId === job.id

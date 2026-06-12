@@ -38,10 +38,12 @@ calculated from the REAL posting time on the source site
 
 Search terms/tags match the job TITLE only — case-insensitive, with the
 term anchored at a word boundary ("admin" matches "Admin Assistant" and
-"Administrator" but not "badminton"). Descriptions and company names are
-NOT matched, except via the "also search descriptions" toggle which is OFF
-by default. The same gate applies at storage time (server) and display
-time (client) via the shared lib/match.ts.
+"Administrator" but not "badminton"). Terms starting with a non-word
+character (".net developer") skip the anchor so they remain matchable.
+Descriptions and company names are NOT matched, except via the "also
+search descriptions" toggle which is OFF by default. The same gate applies
+at storage time (server) and display time (client) via the shared
+lib/match.ts.
 
 ## Sources
 
@@ -75,9 +77,15 @@ descriptions toggle; sort (newest by posting time / salary high-to-low).
 Filter changes apply instantly client-side; the Refresh button re-runs the
 active search against the live APIs (10s server gap + 12s client
 cooldown; friendly notice + stored results on failure — never crash).
-"Save search" stores the full filter state in the alerts table; the Saved
-tab lists saved searches with Load-and-run and Delete. Jobs can be hidden
-per-card (localStorage), with an unhide control.
+Contract filter semantics: exactly ONE selected type filters strictly;
+BOTH selected means "no preference" (must never show fewer results than
+one — contract data is sparse/unknown for most Reed rows). "Save search"
+stores the FULL filter state in the alerts table — fields without a
+dedicated column (exclude words, posted-within, description toggle, sort)
+ride as JSON in the free-text `keywords` column. The Saved tab lists saved
+searches with Load-and-run and Delete. Jobs can be hidden per-card
+(localStorage), with an unhide control. Date-only calendar maths is pinned
+to Europe/London on BOTH server and client.
 
 ## Classification heuristics (honest best-effort)
 

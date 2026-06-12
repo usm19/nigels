@@ -18,7 +18,7 @@ const AlertInputSchema = z.object({
     .array(z.enum(EMPLOYMENT_TYPES))
     .max(4)
     .transform((types) => [...new Set(types)]),
-  keywords: z.string().trim().max(300).nullable().optional().default(null),
+  keywords: z.string().trim().max(2000).nullable().optional().default(null),
   salary_min: z.number().min(0).max(10_000_000).nullable().optional().default(null),
   salary_max: z.number().min(0).max(10_000_000).nullable().optional().default(null),
   government_only: z.boolean().optional().default(false),
