@@ -2,7 +2,7 @@
 
 import { useRef } from "react";
 
-export type TabId = "jobs" | "applied" | "alerts";
+export type TabId = "jobs" | "applied" | "saved";
 
 interface TabsProps {
   tab: TabId;
@@ -13,7 +13,7 @@ interface TabsProps {
 const TAB_DEFS: Array<{ id: TabId; label: string }> = [
   { id: "jobs", label: "Jobs" },
   { id: "applied", label: "Applied" },
-  { id: "alerts", label: "Alerts" },
+  { id: "saved", label: "Saved" },
 ];
 
 export function Tabs({ tab, counts, onChange }: TabsProps) {

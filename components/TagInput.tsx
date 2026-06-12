@@ -11,14 +11,30 @@ const MAX_SUGGESTIONS = 8;
 interface TagInputProps {
   value: string[];
   onChange: (tags: string[]) => void;
+  /** Show the UK job-title autocomplete (on by default). */
+  suggest?: boolean;
+  placeholder?: string;
+  ariaLabel?: string;
+  /** Smaller paddings for use inside the filters panel. */
+  compact?: boolean;
+  /** Helper line under the input; pass null to hide it. */
+  hint?: string | null;
 }
 
 /**
- * Accessible tag input with job-title autocomplete (combobox pattern).
- * Prefix matches rank above substring matches; keyboard fully supported
- * (arrows, Enter, Escape, Backspace to remove the last tag).
+ * Accessible tag input with optional job-title autocomplete (combobox
+ * pattern). Prefix matches rank above substring matches; keyboard fully
+ * supported (arrows, Enter, Escape, Backspace to remove the last tag).
  */
-export function TagInput({ value, onChange }: TagInputProps) {
+export function TagInput({
+  value,
+  onChange,
+  suggest = true,
+  placeholder,
+  ariaLabel = "Add a tag — type a job title",
+  compact = false,
+  hint = "Press Enter to add. Each one is searched separately.",
+}: TagInputProps) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
@@ -26,6 +42,7 @@ export function TagInput({ value, onChange }: TagInputProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const suggestions = useMemo(() => {
+    if (!suggest) return [];
     const q = text.trim().toLowerCase();
     if (!q) return [];
     const chosen = new Set(value);
@@ -37,7 +54,7 @@ export function TagInput({ value, onChange }: TagInputProps) {
       else if (title.includes(q)) substring.push(title);
     }
     return [...prefix, ...substring].slice(0, MAX_SUGGESTIONS);
-  }, [text, value]);
+  }, [text, value, suggest]);
 
   function addTag(raw: string) {
     const tag = raw.trim().toLowerCase().replace(/\s+/g, " ");
@@ -90,7 +107,9 @@ export function TagInput({ value, onChange }: TagInputProps) {
   return (
     <div className="relative">
       <div
-        className="flex flex-wrap items-center gap-1.5 rounded-xl border border-line bg-background px-2.5 py-2 transition-colors focus-within:border-gold-bright"
+        className={`flex flex-wrap items-center gap-1.5 rounded-xl border border-line bg-background transition-colors focus-within:border-gold-bright ${
+          compact ? "px-2 py-1.5" : "px-2.5 py-2"
+        }`}
         onClick={() => inputRef.current?.focus()}
       >
         {value.map((tag) => (
@@ -101,7 +120,7 @@ export function TagInput({ value, onChange }: TagInputProps) {
             {tag}
             <button
               type="button"
-              aria-label={`Remove tag ${tag}`}
+              aria-label={`Remove ${tag}`}
               onClick={() => removeTag(tag)}
               className="rounded-full p-0.5 transition-colors hover:bg-brand/15"
             >
@@ -119,11 +138,11 @@ export function TagInput({ value, onChange }: TagInputProps) {
             expanded && highlight >= 0 ? `${listId}-${highlight}` : undefined
           }
           aria-autocomplete="list"
-          aria-label="Add a tag — type a job title"
-          placeholder={
-            value.length === 0 ? "Type a job title, e.g. admin…" : "Add another…"
-          }
-          className="min-w-[140px] flex-1 bg-transparent py-1 text-base text-ink outline-none placeholder:text-ink-soft/70"
+          aria-label={ariaLabel}
+          placeholder={value.length === 0 ? placeholder : "Add another…"}
+          className={`min-w-[140px] flex-1 bg-transparent text-ink outline-none placeholder:text-ink-soft/70 ${
+            compact ? "py-0.5 text-sm" : "py-1 text-base"
+          }`}
           value={text}
           onChange={(e) => {
             setText(e.target.value);
@@ -171,9 +190,7 @@ export function TagInput({ value, onChange }: TagInputProps) {
         </ul>
       )}
 
-      <p className="mt-1.5 text-xs text-ink-soft">
-        Press Enter to add a tag. Each tag is searched separately.
-      </p>
+      {hint && <p className="mt-1.5 text-xs text-ink-soft">{hint}</p>}
     </div>
   );
 }

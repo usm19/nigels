@@ -1,5 +1,4 @@
 import "server-only";
-import type { EmploymentType, FetchedJob } from "@/lib/types";
 
 // --- Birmingham gate -------------------------------------------------------
 // This is location-TEXT matching, not council-boundary matching. Two clues
@@ -49,28 +48,4 @@ export function detectRemote(text: string): boolean {
 
 export function detectHybrid(text: string): boolean {
   return HYBRID_PATTERN.test(text);
-}
-
-// --- Employment-type gate ---------------------------------------------------
-/**
- * True when a job satisfies at least one of the selected employment types
- * (OR semantics). An empty selection means "no preference".
- */
-export function matchesEmploymentTypes(
-  job: FetchedJob,
-  selected: EmploymentType[]
-): boolean {
-  if (selected.length === 0) return true;
-  return selected.some((type) => {
-    switch (type) {
-      case "full_time":
-        return job.contract_time === "full_time";
-      case "part_time":
-        return job.contract_time === "part_time";
-      case "remote":
-        return job.is_remote;
-      case "hybrid":
-        return job.is_hybrid;
-    }
-  });
 }

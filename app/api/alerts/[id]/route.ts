@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { Alert } from "@/lib/types";
-import { EMPLOYMENT_TYPES } from "@/lib/types";
+import { CONTRACT_TYPES, EMPLOYMENT_TYPES, EXPERIENCE_LEVELS } from "@/lib/types";
 import { getSupabase } from "@/lib/server/supabase";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +21,18 @@ const AlertPatchSchema = z
       .array(z.enum(EMPLOYMENT_TYPES))
       .max(4)
       .transform((types) => [...new Set(types)]),
+    keywords: z.string().trim().max(300).nullable(),
+    salary_min: z.number().min(0).max(10_000_000).nullable(),
+    salary_max: z.number().min(0).max(10_000_000).nullable(),
+    government_only: z.boolean(),
+    experience_levels: z
+      .array(z.enum(EXPERIENCE_LEVELS))
+      .max(3)
+      .transform((v) => [...new Set(v)]),
+    contract_types: z
+      .array(z.enum(CONTRACT_TYPES))
+      .max(2)
+      .transform((v) => [...new Set(v)]),
     is_active: z.boolean(),
   })
   .partial();
@@ -31,7 +43,7 @@ export async function PATCH(
 ) {
   const { id } = await params;
   if (!UUID_RE.test(id)) {
-    return NextResponse.json({ error: "Alert not found." }, { status: 404 });
+    return NextResponse.json({ error: "Saved search not found." }, { status: 404 });
   }
   let patch: z.infer<typeof AlertPatchSchema>;
   try {
@@ -56,12 +68,12 @@ export async function PATCH(
       .maybeSingle();
     if (error) throw new Error(error.message);
     if (!data) {
-      return NextResponse.json({ error: "Alert not found." }, { status: 404 });
+      return NextResponse.json({ error: "Saved search not found." }, { status: 404 });
     }
     return NextResponse.json({ alert: data as Alert });
   } catch {
     return NextResponse.json(
-      { error: "Could not update the alert." },
+      { error: "Could not update the saved search." },
       { status: 500 }
     );
   }
@@ -73,7 +85,7 @@ export async function DELETE(
 ) {
   const { id } = await params;
   if (!UUID_RE.test(id)) {
-    return NextResponse.json({ error: "Alert not found." }, { status: 404 });
+    return NextResponse.json({ error: "Saved search not found." }, { status: 404 });
   }
   try {
     const sb = getSupabase();
@@ -82,7 +94,7 @@ export async function DELETE(
     return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json(
-      { error: "Could not delete the alert." },
+      { error: "Could not delete the saved search." },
       { status: 500 }
     );
   }

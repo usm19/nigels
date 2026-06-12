@@ -1,77 +1,67 @@
 import "server-only";
 import type {
-  Alert,
-  EmploymentType,
   FetchedJob,
   Job,
+  RefreshRequest,
   RefreshResponse,
   SourceHealth,
+  SourceQuery,
   SourceStatus,
 } from "@/lib/types";
 import { JOB_TTL_MS } from "@/lib/format";
+import { matchesAnyTerm, matchesEmploymentTypes } from "@/lib/match";
 import { getSupabase } from "./supabase";
 import { searchAdzuna } from "./adzuna";
 import { searchReed } from "./reed";
-import { matchesEmploymentTypes } from "./filters";
+import { londonTodayEpochDays, londonTodayStartIso } from "./time";
 
 // Live API calls are allowed at most once per MIN_LIVE_FETCH_GAP_MS. Within
 // the gap, refresh still runs the 24-hour cleanup and returns stored jobs.
 const MIN_LIVE_FETCH_GAP_MS = 10_000;
-// Safety cap so a pile of alerts/tags can't hammer the sources' rate limits.
+// Safety cap so a pile of terms can't hammer the sources' rate limits.
 const MAX_QUERIES_PER_SOURCE = 12;
 
 let lastLiveFetchStartedAt = 0;
 
-interface PlannedQuery {
-  keyword: string | null;
-  flag: "full" | "part" | null;
-  /**
-   * The employment-type selections of every alert that produced this query.
-   * A fetched job is kept if it satisfies at least one of these selections.
-   */
-  gates: EmploymentType[][];
-}
-
 /**
- * Turn the active alerts into a de-duplicated list of source queries.
+ * Turn the active search into a de-duplicated list of source queries.
  * Full/part-time go down to the APIs as flags; remote/hybrid become extra
- * search words plus keyword detection on the results.
+ * search words plus keyword detection on the results; a single selected
+ * contract type and any salary bounds ride along on every query.
  */
-function buildQueryPlan(alerts: Alert[]): {
-  plan: PlannedQuery[];
+function buildQueryPlan(search: RefreshRequest): {
+  plan: SourceQuery[];
   capped: boolean;
 } {
-  const map = new Map<string, PlannedQuery>();
-  for (const alert of alerts) {
-    const tags = alert.tags.length > 0 ? alert.tags : [null];
-    const types = alert.employment_types;
-    for (const tag of tags) {
-      const variants: Array<Pick<PlannedQuery, "keyword" | "flag">> = [];
-      if (types.length === 0) {
-        variants.push({ keyword: tag, flag: null });
-      } else {
-        if (types.includes("full_time")) {
-          variants.push({ keyword: tag, flag: "full" });
-        }
-        if (types.includes("part_time")) {
-          variants.push({ keyword: tag, flag: "part" });
-        }
-        if (types.includes("remote")) {
-          variants.push({ keyword: tag ? `${tag} remote` : "remote", flag: null });
-        }
-        if (types.includes("hybrid")) {
-          variants.push({ keyword: tag ? `${tag} hybrid` : "hybrid", flag: null });
-        }
+  const terms: Array<string | null> =
+    search.terms.length > 0 ? search.terms : [null];
+  const contractFlag =
+    search.contractTypes.length === 1 ? search.contractTypes[0] : null;
+  const map = new Map<string, SourceQuery>();
+
+  for (const term of terms) {
+    const variants: Array<Pick<SourceQuery, "keyword" | "flag">> = [];
+    const types = search.employmentTypes;
+    if (types.length === 0) {
+      variants.push({ keyword: term, flag: null });
+    } else {
+      if (types.includes("full_time")) variants.push({ keyword: term, flag: "full" });
+      if (types.includes("part_time")) variants.push({ keyword: term, flag: "part" });
+      if (types.includes("remote")) {
+        variants.push({ keyword: term ? `${term} remote` : "remote", flag: null });
       }
-      for (const v of variants) {
-        const key = `${v.keyword ?? ""}::${v.flag ?? ""}`;
-        const existing = map.get(key);
-        if (existing) {
-          existing.gates.push(types);
-        } else {
-          map.set(key, { keyword: v.keyword, flag: v.flag, gates: [types] });
-        }
+      if (types.includes("hybrid")) {
+        variants.push({ keyword: term ? `${term} hybrid` : "hybrid", flag: null });
       }
+    }
+    for (const v of variants) {
+      map.set(`${v.keyword ?? ""}::${v.flag ?? ""}`, {
+        keyword: v.keyword,
+        flag: v.flag,
+        contractFlag,
+        salaryMin: search.salaryMin,
+        salaryMax: search.salaryMax,
+      });
     }
   }
   const all = [...map.values()];
@@ -81,9 +71,50 @@ function buildQueryPlan(alerts: Alert[]): {
   };
 }
 
+/**
+ * The storage gate for a fetched job:
+ *  - TITLE-ONLY term matching (descriptions only when explicitly enabled) —
+ *    the APIs' own keyword search matches descriptions too broadly.
+ *  - Employment-type gate (OR semantics).
+ *  - Skip jobs already past the 24-hour window since their REAL posting time
+ *    (Reed returns plenty of week-old listings; storing them is pointless).
+ */
+function passesSearchGate(
+  job: FetchedJob,
+  search: RefreshRequest,
+  nowMs: number,
+  todayEpochDays: number
+): boolean {
+  if (search.terms.length > 0) {
+    const inTitle = matchesAnyTerm(job.title, search.terms);
+    const inDescription =
+      search.searchDescriptions && job.description
+        ? matchesAnyTerm(job.description, search.terms)
+        : false;
+    if (!inTitle && !inDescription) return false;
+  }
+  if (!matchesEmploymentTypes(job, search.employmentTypes)) return false;
+
+  if (job.source_posted_date) {
+    const postedMs = Date.parse(job.source_posted_date);
+    if (!Number.isNaN(postedMs)) {
+      if (job.posted_time_precision === "date_only") {
+        const postedDays = Math.floor(postedMs / 86_400_000);
+        if (todayEpochDays - postedDays >= 1) return false;
+      } else if (nowMs - postedMs > JOB_TTL_MS) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 async function runSource(
   source: "adzuna" | "reed",
-  plan: PlannedQuery[]
+  plan: SourceQuery[],
+  search: RefreshRequest,
+  nowMs: number,
+  todayEpochDays: number
 ): Promise<{ jobs: FetchedJob[]; health: SourceHealth }> {
   const collected: FetchedJob[] = [];
   let failures = 0;
@@ -91,11 +122,9 @@ async function runSource(
   for (const q of plan) {
     try {
       const results =
-        source === "adzuna"
-          ? await searchAdzuna(q.keyword, q.flag)
-          : await searchReed(q.keyword, q.flag);
+        source === "adzuna" ? await searchAdzuna(q) : await searchReed(q);
       for (const job of results) {
-        if (q.gates.some((gate) => matchesEmploymentTypes(job, gate))) {
+        if (passesSearchGate(job, search, nowMs, todayEpochDays)) {
           collected.push(job);
         }
       }
@@ -131,49 +160,93 @@ function describeSourceProblems(status: SourceStatus): string | null {
 }
 
 /**
- * The heart of Nigel's. In order:
- *  1. Load active alerts.
- *  2. Query Adzuna + Reed for each (Birmingham only, small radius).
- *  3. Strict Birmingham post-filter + employment-type gate (inside the
- *     source clients / runSource).
- *  4. De-dupe by (source, source_job_id); insert new rows only — existing
- *     rows keep their original first_seen_at, status and applied_at.
- *  5. Delete active jobs first seen more than 24 hours ago (applied exempt).
- *  6. Return everything left, freshest first.
+ * Remove active jobs that are past the 24-hour window since their REAL
+ * posting time. Three passes because the rule differs by precision:
+ *  1. Exact timestamps (Adzuna): older than now − 24h.
+ *  2. Date-only / all Reed rows: dated yesterday or earlier (London time).
+ *  3. No posting time at all: fall back to first_seen_at.
+ * Applied jobs are always exempt.
  */
-export async function runRefresh(): Promise<RefreshResponse> {
+async function removeExpiredJobs(): Promise<number> {
+  const sb = getSupabase();
+  const exactCutoffIso = new Date(Date.now() - JOB_TTL_MS).toISOString();
+  const dateOnlyCutoffIso = londonTodayStartIso();
+  let removed = 0;
+
+  const exact = await sb
+    .from("jobs")
+    .delete()
+    .eq("status", "active")
+    .eq("posted_time_precision", "exact")
+    .neq("source", "reed")
+    .lt("source_posted_date", exactCutoffIso)
+    .select("id");
+  if (exact.error) {
+    throw new Error(`Could not clean up old jobs: ${exact.error.message}`);
+  }
+  removed += exact.data?.length ?? 0;
+
+  const dateOnly = await sb
+    .from("jobs")
+    .delete()
+    .eq("status", "active")
+    .or("source.eq.reed,posted_time_precision.eq.date_only")
+    .lt("source_posted_date", dateOnlyCutoffIso)
+    .select("id");
+  if (dateOnly.error) {
+    throw new Error(`Could not clean up old jobs: ${dateOnly.error.message}`);
+  }
+  removed += dateOnly.data?.length ?? 0;
+
+  const unknown = await sb
+    .from("jobs")
+    .delete()
+    .eq("status", "active")
+    .is("source_posted_date", null)
+    .lt("first_seen_at", exactCutoffIso)
+    .select("id");
+  if (unknown.error) {
+    throw new Error(`Could not clean up old jobs: ${unknown.error.message}`);
+  }
+  removed += unknown.data?.length ?? 0;
+
+  return removed;
+}
+
+/**
+ * The heart of Nigel's. The Refresh button re-runs the ACTIVE SEARCH:
+ *  1. Build a query plan from the search-bar state.
+ *  2. Query Adzuna + Reed (Birmingham only, small radius, fresh-first).
+ *  3. Birmingham post-filter + title-only term gate + employment gate.
+ *  4. De-dupe by (source, source_job_id); insert new rows only — existing
+ *     rows keep their first_seen_at, status and applied_at.
+ *  5. Delete active jobs past 24h since their REAL posting time (applied exempt).
+ *  6. Return everything left, newest-posted first, plus the ids that are new
+ *     in this refresh (for the NEW badge).
+ */
+export async function runRefresh(
+  search: RefreshRequest
+): Promise<RefreshResponse> {
   const sb = getSupabase();
   const startedAt = Date.now();
+  const todayEpochDays = londonTodayEpochDays();
   const notes: string[] = [];
 
   let live = false;
   let newJobs = 0;
+  const newKeys = new Set<string>();
   let sourceStatus: SourceStatus = { adzuna: "skipped", reed: "skipped" };
-
-  const { data: alertRows, error: alertsError } = await sb
-    .from("alerts")
-    .select("*")
-    .eq("is_active", true)
-    .order("created_at", { ascending: true });
-  if (alertsError) {
-    throw new Error(`Could not load alerts: ${alertsError.message}`);
-  }
-  const alerts = (alertRows ?? []) as Alert[];
 
   const withinCooldown =
     startedAt - lastLiveFetchStartedAt < MIN_LIVE_FETCH_GAP_MS;
 
   if (withinCooldown) {
     notes.push("Refreshed a moment ago — showing the latest stored results.");
-  } else if (alerts.length === 0) {
-    notes.push(
-      "No active alerts — add one in the Alerts tab, then press Refresh."
-    );
   } else {
     lastLiveFetchStartedAt = startedAt;
     live = true;
 
-    const { plan, capped } = buildQueryPlan(alerts);
+    const { plan, capped } = buildQueryPlan(search);
     if (capped) {
       notes.push(
         "Some searches were skipped this round to stay within the job sources' rate limits."
@@ -181,8 +254,8 @@ export async function runRefresh(): Promise<RefreshResponse> {
     }
 
     const [adzunaRun, reedRun] = await Promise.all([
-      runSource("adzuna", plan),
-      runSource("reed", plan),
+      runSource("adzuna", plan, search, startedAt, todayEpochDays),
+      runSource("reed", plan, search, startedAt, todayEpochDays),
     ]);
     sourceStatus = { adzuna: adzunaRun.health, reed: reedRun.health };
     const problem = describeSourceProblems(sourceStatus);
@@ -196,8 +269,6 @@ export async function runRefresh(): Promise<RefreshResponse> {
     }
 
     if (unique.size > 0) {
-      // Which of these has Nigel's already seen? (The whole key set is small
-      // for a single-user app, so one read is simplest and safest.)
       const { data: existingRows, error: existingError } = await sb
         .from("jobs")
         .select("source,source_job_id");
@@ -210,12 +281,15 @@ export async function runRefresh(): Promise<RefreshResponse> {
             `${r.source}::${r.source_job_id}`
         )
       );
-      newJobs = [...unique.keys()].filter((k) => !existing.has(k)).length;
+      for (const key of unique.keys()) {
+        if (!existing.has(key)) newKeys.add(key);
+      }
+      newJobs = newKeys.size;
 
       // Upsert deliberately omits id, first_seen_at, status and applied_at:
       // new rows get the database defaults (first_seen_at = now()), while
-      // existing rows keep their original clock and applied state — only the
-      // descriptive fields are refreshed.
+      // existing rows keep their original first-seen clock and applied
+      // state — only the descriptive fields are refreshed.
       const payload = [...unique.values()];
       for (let i = 0; i < payload.length; i += 400) {
         const chunk = payload.slice(i, i + 400);
@@ -229,33 +303,30 @@ export async function runRefresh(): Promise<RefreshResponse> {
     }
   }
 
-  // 24-hour cleanup, measured from first_seen_at. Applied jobs are exempt.
-  const cutoffIso = new Date(Date.now() - JOB_TTL_MS).toISOString();
-  const { data: removedRows, error: removeError } = await sb
-    .from("jobs")
-    .delete()
-    .eq("status", "active")
-    .lt("first_seen_at", cutoffIso)
-    .select("id");
-  if (removeError) {
-    throw new Error(`Could not clean up old jobs: ${removeError.message}`);
-  }
+  const removedJobs = await removeExpiredJobs();
 
   const { data: jobRows, error: jobsError } = await sb
     .from("jobs")
     .select("*")
+    .order("source_posted_date", { ascending: false, nullsFirst: false })
     .order("first_seen_at", { ascending: false });
   if (jobsError) {
     throw new Error(`Could not load jobs: ${jobsError.message}`);
   }
+  const jobs = (jobRows ?? []) as Job[];
+
+  const newJobIds = jobs
+    .filter((j) => newKeys.has(`${j.source}::${j.source_job_id}`))
+    .map((j) => j.id);
 
   return {
     ok: true,
     live,
     refreshedAt: new Date().toISOString(),
-    jobs: (jobRows ?? []) as Job[],
+    jobs,
     newJobs,
-    removedJobs: removedRows?.length ?? 0,
+    newJobIds,
+    removedJobs,
     sourceStatus,
     message: notes.length > 0 ? notes.join(" ") : null,
   };

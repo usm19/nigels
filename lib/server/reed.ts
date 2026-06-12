@@ -1,13 +1,18 @@
 import "server-only";
-import type { FetchedJob } from "@/lib/types";
+import type { FetchedJob, SourceQuery } from "@/lib/types";
 import { env } from "./env";
 import { htmlToText, sanitizeJobHtml } from "./sanitize";
 import { detectHybrid, detectRemote, isBirminghamLocation } from "./filters";
+import { classifyExperience, detectGovernment } from "./classify";
+import { fetchJsonWithRetry } from "./http";
 
 // Reed Jobseeker API. Docs: https://www.reed.co.uk/developers/jobseeker
 // Auth is HTTP Basic with the API key as the username and an empty password.
-// The search response only carries a truncated description and a date-only
-// posting date (DD/MM/YYYY); the details endpoint returns the full description.
+// HONEST LIMITATION: Reed's `date` field is DD/MM/YYYY with NO time of day,
+// so Reed jobs are stored with posted_time_precision = "date_only" and the
+// UI shows "today / yesterday / X days ago" — a precise hour/minute age
+// would be fabricated. The search response also only carries a truncated
+// description; the details endpoint returns the full one.
 
 interface ReedApiJob {
   jobId?: number;
@@ -27,7 +32,7 @@ function reedAuthHeader(): string {
   return "Basic " + Buffer.from(`${env.reedApiKey}:`).toString("base64");
 }
 
-/** Reed dates are DD/MM/YYYY with no time. Midnight UTC stands in for the time. */
+/** Reed dates are DD/MM/YYYY. Stored at midnight UTC, flagged date-only. */
 function parseReedDate(value: string | undefined): string | null {
   if (!value) return null;
   const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(value.trim());
@@ -36,36 +41,30 @@ function parseReedDate(value: string | undefined): string | null {
   return Number.isNaN(Date.parse(iso)) ? null : iso;
 }
 
-/**
- * Search Reed for Birmingham jobs.
- * @param keyword search words (an alert tag, optionally with "remote"/"hybrid" added)
- * @param flag pushes full-time/part-time down to the API itself
- */
-export async function searchReed(
-  keyword: string | null,
-  flag: "full" | "part" | null
-): Promise<FetchedJob[]> {
+export async function searchReed(q: SourceQuery): Promise<FetchedJob[]> {
   const params = new URLSearchParams({
     locationName: "Birmingham",
     distanceFromLocation: "5",
     resultsToTake: "100",
   });
-  if (keyword) params.set("keywords", keyword);
-  if (flag === "full") params.set("fullTime", "true");
-  if (flag === "part") params.set("partTime", "true");
-
-  const res = await fetch(
-    `https://www.reed.co.uk/api/1.0/search?${params.toString()}`,
-    {
-      headers: { Authorization: reedAuthHeader() },
-      cache: "no-store",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    }
-  );
-  if (!res.ok) {
-    throw new Error(`Reed responded with HTTP ${res.status}`);
+  if (q.keyword) params.set("keywords", q.keyword);
+  if (q.flag === "full") params.set("fullTime", "true");
+  if (q.flag === "part") params.set("partTime", "true");
+  if (q.contractFlag === "permanent") params.set("permanent", "true");
+  if (q.contractFlag === "contract") params.set("contract", "true");
+  if (q.salaryMin !== null) {
+    params.set("minimumSalary", String(Math.floor(q.salaryMin)));
   }
-  const data = (await res.json()) as { results?: ReedApiJob[] };
+  if (q.salaryMax !== null) {
+    params.set("maximumSalary", String(Math.ceil(q.salaryMax)));
+  }
+
+  const data = (await fetchJsonWithRetry(
+    `https://www.reed.co.uk/api/1.0/search?${params.toString()}`,
+    { headers: { Authorization: reedAuthHeader() } },
+    TIMEOUT_MS,
+    "Reed"
+  )) as { results?: ReedApiJob[] };
   const results = Array.isArray(data.results) ? data.results : [];
 
   const jobs: FetchedJob[] = [];
@@ -81,21 +80,22 @@ export async function searchReed(
     const title = htmlToText(r.jobTitle);
     const description = htmlToText(r.jobDescription);
     const haystack = `${title} ${description}`;
+    const company = r.employerName?.trim() || null;
 
     // Reed's search response has no contract-time field, so the only honest
     // signal is the flag the API call itself was filtered by.
-    const implied =
-      flag === "full" ? "full_time" : flag === "part" ? "part_time" : null;
+    const impliedTime =
+      q.flag === "full" ? "full_time" : q.flag === "part" ? "part_time" : null;
 
     jobs.push({
       source: "reed",
       source_job_id: String(r.jobId),
       title,
-      company: r.employerName?.trim() || null,
+      company,
       location: r.locationName?.trim() || null,
       description: description || null,
       url: r.jobUrl,
-      contract_time: implied,
+      contract_time: impliedTime,
       is_remote: detectRemote(haystack),
       is_hybrid: detectHybrid(haystack),
       salary_min:
@@ -107,6 +107,10 @@ export async function searchReed(
           ? r.maximumSalary
           : null,
       source_posted_date: parseReedDate(r.date),
+      posted_time_precision: "date_only",
+      is_government: detectGovernment(company, title),
+      experience_level: classifyExperience(title),
+      contract_type: q.contractFlag,
     });
   }
   return jobs;
@@ -130,18 +134,12 @@ export async function fetchReedFullDescriptionHtml(
     return cached.html;
   }
 
-  const res = await fetch(
+  const data = (await fetchJsonWithRetry(
     `https://www.reed.co.uk/api/1.0/jobs/${encodeURIComponent(sourceJobId)}`,
-    {
-      headers: { Authorization: reedAuthHeader() },
-      cache: "no-store",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    }
-  );
-  if (!res.ok) {
-    throw new Error(`Reed details responded with HTTP ${res.status}`);
-  }
-  const data = (await res.json()) as { jobDescription?: string } | null;
+    { headers: { Authorization: reedAuthHeader() } },
+    TIMEOUT_MS,
+    "Reed"
+  )) as { jobDescription?: string } | null;
   if (!data?.jobDescription) return null;
 
   const html = sanitizeJobHtml(data.jobDescription);

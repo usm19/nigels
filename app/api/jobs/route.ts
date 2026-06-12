@@ -1,23 +1,33 @@
 import { NextResponse } from "next/server";
 import type { Job, JobsResponse } from "@/lib/types";
-import { JOB_TTL_MS } from "@/lib/format";
+import { isExpiredByPosting } from "@/lib/format";
 import { getSupabase } from "@/lib/server/supabase";
+import { londonTodayEpochDays } from "@/lib/server/time";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/** Stored jobs for the initial page load: applied ones plus anything under 24h. */
+/**
+ * Stored jobs for the initial page load: applied ones plus anything still
+ * inside the 24-hour window measured from its REAL posting time.
+ */
 export async function GET() {
   try {
     const sb = getSupabase();
-    const cutoffIso = new Date(Date.now() - JOB_TTL_MS).toISOString();
     const { data, error } = await sb
       .from("jobs")
       .select("*")
-      .or(`status.eq.applied,first_seen_at.gte.${cutoffIso}`)
+      .order("source_posted_date", { ascending: false, nullsFirst: false })
       .order("first_seen_at", { ascending: false });
     if (error) throw new Error(error.message);
-    const body: JobsResponse = { jobs: (data ?? []) as Job[] };
+
+    const nowMs = Date.now();
+    const todayDays = londonTodayEpochDays();
+    const jobs = ((data ?? []) as Job[]).filter(
+      (j) => j.status === "applied" || !isExpiredByPosting(j, nowMs, todayDays)
+    );
+
+    const body: JobsResponse = { jobs };
     return NextResponse.json(body);
   } catch {
     return NextResponse.json(

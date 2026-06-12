@@ -8,9 +8,16 @@ import {
 } from "lucide-react";
 import type { Job } from "@/lib/types";
 import {
-  contractLabel,
+  CONTRACT_TYPE_LABELS,
+  EXPERIENCE_LEVEL_LABELS,
+} from "@/lib/types";
+import {
+  contractTimeLabel,
+  effectivePrecision,
   formatDateNice,
+  formatDateTimeNice,
   formatSalary,
+  postedAgo,
   timeAgo,
 } from "@/lib/format";
 import { useNow } from "./TickContext";
@@ -42,7 +49,9 @@ export function JobDetail({
   const mounted = now !== 0;
   const sourceName = job.source === "adzuna" ? "Adzuna" : "Reed";
   const salary = formatSalary(job.salary_min, job.salary_max);
-  const contract = contractLabel(job.contract_time);
+  const contractTime = contractTimeLabel(job.contract_time);
+  const ago = mounted ? postedAgo(job, now) : null;
+  const dateOnly = effectivePrecision(job) === "date_only";
 
   return (
     <article aria-labelledby="job-detail-title">
@@ -81,7 +90,18 @@ export function JobDetail({
           <Badge tone={job.source === "adzuna" ? "brand" : "purple"}>
             {sourceName}
           </Badge>
-          {contract && <Badge tone="neutral">{contract}</Badge>}
+          {contractTime && <Badge tone="neutral">{contractTime}</Badge>}
+          {job.contract_type && (
+            <Badge tone="neutral">
+              {CONTRACT_TYPE_LABELS[job.contract_type]}
+            </Badge>
+          )}
+          {job.experience_level && (
+            <Badge tone="neutral">
+              {EXPERIENCE_LEVEL_LABELS[job.experience_level]}
+            </Badge>
+          )}
+          {job.is_government && <Badge tone="gold">Public sector</Badge>}
           {job.is_remote && <Badge tone="green">Remote</Badge>}
           {job.is_hybrid && <Badge tone="green">Hybrid</Badge>}
           {salary && <Badge tone="gold">{salary}</Badge>}
@@ -91,21 +111,36 @@ export function JobDetail({
           <div>
             <dt className="sr-only">Posted</dt>
             <dd>
-              Posted {mounted ? timeAgo(job.first_seen_at, now) : "…"}{" "}
-              <span className="text-ink-soft/80">
-                (when Nigel&rsquo;s first spotted it)
-              </span>
+              {job.source_posted_date ? (
+                dateOnly ? (
+                  <>
+                    Posted <span className="font-medium text-ink">{ago ?? "…"}</span>{" "}
+                    <span className="text-ink-soft/80">
+                      ({formatDateNice(job.source_posted_date)} — Reed provides
+                      the date only, not the time)
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    Posted <span className="font-medium text-ink">{ago ?? "…"}</span>{" "}
+                    <span className="text-ink-soft/80">
+                      ({formatDateTimeNice(job.source_posted_date)} —{" "}
+                      {sourceName}&rsquo;s own timestamp)
+                    </span>
+                  </>
+                )
+              ) : (
+                <>Posting time unknown — {sourceName} didn&rsquo;t provide it</>
+              )}
             </dd>
           </div>
-          {job.source_posted_date && (
-            <div>
-              <dt className="sr-only">Originally listed</dt>
-              <dd>
-                Originally listed: {formatDateNice(job.source_posted_date)} on{" "}
-                {sourceName}
-              </dd>
-            </div>
-          )}
+          <div>
+            <dt className="sr-only">First spotted</dt>
+            <dd className="text-ink-soft/80">
+              First spotted by Nigel&rsquo;s{" "}
+              {mounted ? timeAgo(job.first_seen_at, now) : "…"}
+            </dd>
+          </div>
           {job.status === "applied" && job.applied_at && (
             <div>
               <dt className="sr-only">Applied</dt>

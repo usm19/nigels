@@ -5,19 +5,30 @@ import type {
   Alert,
   Job,
   JobDetailResponse,
+  RefreshRequest,
   RefreshResponse,
+  SearchState,
 } from "@/lib/types";
-import { isExpired } from "@/lib/format";
+import { DEFAULT_SEARCH } from "@/lib/types";
+import { isExpiredByPosting } from "@/lib/format";
+import {
+  alertFieldsFromSearch,
+  applySearchFilters,
+  searchFromAlert,
+} from "@/lib/search";
 import { TickProvider, useNow } from "./TickContext";
 import { TopBar } from "./TopBar";
 import { Tabs, type TabId } from "./Tabs";
+import { SearchBar } from "./SearchBar";
 import { JobCard } from "./JobCard";
 import { JobDetail } from "./JobDetail";
-import { AlertsPanel, type AlertInput } from "./AlertsPanel";
+import { SavedSearches } from "./SavedSearches";
 import { EmptyState, Notice, SkeletonCards, btnPrimary } from "./ui";
 
 const REFRESH_COOLDOWN_MS = 12_000;
 const LAST_REFRESH_KEY = "nigels-last-refresh";
+const SEARCH_KEY = "nigels-search-v2";
+const HIDDEN_KEY = "nigels-hidden-v1";
 
 export default function NigelsApp() {
   return (
@@ -39,25 +50,63 @@ interface NoticeState {
   text: string;
 }
 
+function loadStoredSearch(): SearchState {
+  try {
+    const raw = localStorage.getItem(SEARCH_KEY);
+    if (!raw) return DEFAULT_SEARCH;
+    const parsed = JSON.parse(raw) as Partial<SearchState>;
+    return {
+      ...DEFAULT_SEARCH,
+      ...parsed,
+      terms: Array.isArray(parsed.terms) ? parsed.terms : [],
+      excludeTerms: Array.isArray(parsed.excludeTerms) ? parsed.excludeTerms : [],
+    };
+  } catch {
+    return DEFAULT_SEARCH;
+  }
+}
+
+function refreshBody(s: SearchState): RefreshRequest {
+  return {
+    terms: s.terms,
+    searchDescriptions: s.searchDescriptions,
+    employmentTypes: s.employmentTypes,
+    contractTypes: s.contractTypes,
+    salaryMin: s.salaryMin,
+    salaryMax: s.salaryMax,
+  };
+}
+
 function AppShell() {
   const now = useNow();
 
   const [tab, setTab] = useState<TabId>("jobs");
   const [jobs, setJobs] = useState<Job[] | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
+  const [search, setSearch] = useState<SearchState>(DEFAULT_SEARCH);
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+  const [newIds, setNewIds] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [cooldownUntil, setCooldownUntil] = useState(0);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const [busyApplied, setBusyApplied] = useState(false);
-  const [busyAlerts, setBusyAlerts] = useState(false);
+  const [busySearches, setBusySearches] = useState(false);
   // True once a refresh has delivered jobs, so a slow initial load can't
   // overwrite fresher data.
   const jobsSupersededRef = useRef(false);
+  const hydratedRef = useRef(false);
 
-  // First load: stored jobs + alerts, and the remembered refresh time.
+  // First load: remembered search + hidden jobs + refresh time, then data.
   useEffect(() => {
+    setSearch(loadStoredSearch());
+    try {
+      const hidden = JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "[]");
+      if (Array.isArray(hidden)) setHiddenIds(new Set(hidden.map(String)));
+    } catch {
+      // Fine — nothing hidden.
+    }
     try {
       const stored = localStorage.getItem(LAST_REFRESH_KEY);
       const ms = stored ? Number(stored) : NaN;
@@ -65,6 +114,8 @@ function AppShell() {
     } catch {
       // Private browsing — fine.
     }
+    hydratedRef.current = true;
+
     void (async () => {
       try {
         const [jobsRes, alertsRes] = await Promise.all([
@@ -87,62 +138,105 @@ function AppShell() {
     })();
   }, []);
 
-  const handleRefresh = useCallback(async () => {
-    // The cooldown guard lives here (not just on the top-bar button) so every
-    // path that triggers a refresh respects it.
-    if (refreshing || Date.now() < cooldownUntil) return;
-    setRefreshing(true);
-    setNotice(null);
+  // Remember the search between visits.
+  useEffect(() => {
+    if (!hydratedRef.current) return;
     try {
-      const res = await fetch("/api/refresh", { method: "POST" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as RefreshResponse;
-      jobsSupersededRef.current = true;
-      // A total failure returns ok=false with no jobs — keep what's on
-      // screen rather than wiping the list.
-      setJobs((prev) =>
-        !data.ok && data.jobs.length === 0 ? (prev ?? []) : data.jobs
-      );
-      const at = Date.parse(data.refreshedAt) || Date.now();
-      setLastRefreshedAt(at);
-      try {
-        localStorage.setItem(LAST_REFRESH_KEY, String(at));
-      } catch {
-        // Fine — the timer just won't survive a reload.
-      }
-      if (data.message) {
-        setNotice({ kind: data.ok ? "info" : "error", text: data.message });
-      } else if (data.live) {
-        setNotice({
-          kind: "info",
-          text:
-            data.newJobs > 0
-              ? `Found ${data.newJobs} new job${data.newJobs === 1 ? "" : "s"}.`
-              : "No new jobs this time — you're up to date.",
-        });
-      }
+      localStorage.setItem(SEARCH_KEY, JSON.stringify(search));
     } catch {
-      setNotice({
-        kind: "error",
-        text: "Couldn't reach the sources just now — showing your most recent results.",
-      });
-    } finally {
-      setRefreshing(false);
-      setCooldownUntil(Date.now() + REFRESH_COOLDOWN_MS);
+      // Fine.
     }
-  }, [refreshing, cooldownUntil]);
+  }, [search]);
 
-  // Live views of the data. The expiry check reruns every tick so a job
-  // crossing the 24-hour line disappears in real time (backup for the
-  // server-side delete).
+  // Persist hidden jobs, pruning ids that no longer exist.
+  useEffect(() => {
+    if (!hydratedRef.current || jobs === null) return;
+    const valid = new Set(jobs.map((j) => j.id));
+    const pruned = [...hiddenIds].filter((id) => valid.has(id));
+    if (pruned.length !== hiddenIds.size) {
+      setHiddenIds(new Set(pruned));
+      return;
+    }
+    try {
+      localStorage.setItem(HIDDEN_KEY, JSON.stringify(pruned));
+    } catch {
+      // Fine.
+    }
+  }, [jobs, hiddenIds]);
+
+  const handleRefresh = useCallback(
+    async (override?: SearchState) => {
+      // The cooldown guard lives here (not just on the top-bar button) so
+      // every path that triggers a refresh respects it.
+      if (refreshing || Date.now() < cooldownUntil) return;
+      const active = override ?? search;
+      setRefreshing(true);
+      setNotice(null);
+      try {
+        const res = await fetch("/api/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(refreshBody(active)),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as RefreshResponse;
+        jobsSupersededRef.current = true;
+        // A total failure returns ok=false with no jobs — keep what's on
+        // screen rather than wiping the list.
+        setJobs((prev) =>
+          !data.ok && data.jobs.length === 0 ? (prev ?? []) : data.jobs
+        );
+        if (data.live) setNewIds(new Set(data.newJobIds));
+        const at = Date.parse(data.refreshedAt) || Date.now();
+        setLastRefreshedAt(at);
+        try {
+          localStorage.setItem(LAST_REFRESH_KEY, String(at));
+        } catch {
+          // Fine — the timer just won't survive a reload.
+        }
+        if (data.message) {
+          setNotice({ kind: data.ok ? "info" : "error", text: data.message });
+        } else if (data.live) {
+          setNotice({
+            kind: "info",
+            text:
+              data.newJobs > 0
+                ? `Found ${data.newJobs} newly posted job${data.newJobs === 1 ? "" : "s"}.`
+                : "No newly posted jobs this time — you're up to date.",
+          });
+        }
+      } catch {
+        setNotice({
+          kind: "error",
+          text: "Couldn't reach the sources just now — showing your most recent results.",
+        });
+      } finally {
+        setRefreshing(false);
+        setCooldownUntil(Date.now() + REFRESH_COOLDOWN_MS);
+      }
+    },
+    [refreshing, cooldownUntil, search]
+  );
+
+  // Live views. Freshness uses the REAL posting time and re-checks every
+  // tick, so a job sliding past 24h-since-posting disappears in real time.
   const nowMs = now || Date.now();
-  const activeJobs = useMemo(
+  const freshActive = useMemo(
     () =>
       (jobs ?? []).filter(
-        (j) => j.status === "active" && !isExpired(j, nowMs)
+        (j) => j.status === "active" && !isExpiredByPosting(j, nowMs)
       ),
     [jobs, nowMs]
   );
+  const matching = useMemo(
+    () => applySearchFilters(freshActive, search, nowMs),
+    [freshActive, search, nowMs]
+  );
+  const displayedJobs = useMemo(
+    () => matching.filter((j) => !hiddenIds.has(j.id)),
+    [matching, hiddenIds]
+  );
+  const hiddenCount = matching.length - displayedJobs.length;
   const appliedJobs = useMemo(
     () =>
       (jobs ?? [])
@@ -196,10 +290,21 @@ function AppShell() {
     setDetail(null);
   }
 
+  function hideJob(job: Job) {
+    setHiddenIds((prev) => new Set([...prev, job.id]));
+  }
+
+  function unhideAll() {
+    setHiddenIds(new Set());
+  }
+
   async function toggleApplied(job: Job, applied: boolean) {
-    if (!applied && isExpired({ ...job, status: "active" }, Date.now())) {
+    if (
+      !applied &&
+      isExpiredByPosting({ ...job, status: "active" }, Date.now())
+    ) {
       const sure = window.confirm(
-        "This job is older than 24 hours, so un-applying will remove it from Nigel's completely. Continue?"
+        "This job was posted more than 24 hours ago, so un-applying will remove it from Nigel's completely. Continue?"
       );
       if (!sure) return;
     }
@@ -235,72 +340,59 @@ function AppShell() {
     }
   }
 
-  async function createAlert(input: AlertInput): Promise<boolean> {
-    setBusyAlerts(true);
+  async function saveSearch(name: string): Promise<boolean> {
+    setBusySearches(true);
     try {
       const res = await fetch("/api/alerts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
+        body: JSON.stringify({
+          name,
+          is_active: true,
+          ...alertFieldsFromSearch(search),
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const { alert } = (await res.json()) as { alert: Alert };
       setAlerts((list) => [...(list ?? []), alert]);
+      setNotice({
+        kind: "info",
+        text: `Saved — "${alert.name}" is in your Saved tab.`,
+      });
       return true;
     } catch {
       setNotice({
         kind: "error",
-        text: "Couldn't save the alert — please try again.",
+        text: "Couldn't save the search — please try again.",
       });
       return false;
     } finally {
-      setBusyAlerts(false);
+      setBusySearches(false);
     }
   }
 
-  async function updateAlert(
-    id: string,
-    patch: Partial<AlertInput>
-  ): Promise<boolean> {
-    setBusyAlerts(true);
-    try {
-      const res = await fetch(`/api/alerts/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const { alert } = (await res.json()) as { alert: Alert };
-      setAlerts((list) =>
-        (list ?? []).map((a) => (a.id === alert.id ? alert : a))
-      );
-      return true;
-    } catch {
-      setNotice({
-        kind: "error",
-        text: "Couldn't update the alert — please try again.",
-      });
-      return false;
-    } finally {
-      setBusyAlerts(false);
-    }
+  function loadSearch(alert: Alert) {
+    const loaded = searchFromAlert(alert);
+    setSearch(loaded);
+    setTab("jobs");
+    setDetail(null);
+    void handleRefresh(loaded);
   }
 
-  async function deleteAlert(id: string): Promise<boolean> {
-    setBusyAlerts(true);
+  async function deleteSearch(alert: Alert) {
+    if (!window.confirm(`Delete the saved search "${alert.name}"?`)) return;
+    setBusySearches(true);
     try {
-      const res = await fetch(`/api/alerts/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/alerts/${alert.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setAlerts((list) => (list ?? []).filter((a) => a.id !== id));
-      return true;
+      setAlerts((list) => (list ?? []).filter((a) => a.id !== alert.id));
     } catch {
       setNotice({
         kind: "error",
-        text: "Couldn't delete the alert — please try again.",
+        text: "Couldn't delete the saved search — please try again.",
       });
-      return false;
     } finally {
-      setBusyAlerts(false);
+      setBusySearches(false);
     }
   }
 
@@ -331,9 +423,9 @@ function AppShell() {
             tab={tab}
             onChange={switchTab}
             counts={{
-              jobs: jobs === null ? null : activeJobs.length,
+              jobs: jobs === null ? null : displayedJobs.length,
               applied: jobs === null ? null : appliedJobs.length,
-              alerts: alerts === null ? null : alerts.length,
+              saved: alerts === null ? null : alerts.length,
             }}
           />
         </div>
@@ -356,54 +448,85 @@ function AppShell() {
         >
           {tab === "jobs" &&
             (detailView ?? (
-              <>
+              <div className="space-y-5">
+                <SearchBar
+                  search={search}
+                  onChange={setSearch}
+                  onSaveSearch={saveSearch}
+                  savingSearch={busySearches}
+                  resultCount={jobs === null ? null : displayedJobs.length}
+                />
+
+                {hiddenCount > 0 && (
+                  <p className="text-sm text-ink-soft">
+                    {hiddenCount} job{hiddenCount === 1 ? "" : "s"} hidden.{" "}
+                    <button
+                      type="button"
+                      onClick={unhideAll}
+                      className="font-medium text-brand underline underline-offset-4 hover:text-brand-2"
+                    >
+                      Show {hiddenCount === 1 ? "it" : "them"}
+                    </button>
+                  </p>
+                )}
+
                 {jobs === null && <SkeletonCards />}
-                {jobs !== null && activeJobs.length === 0 && (
+
+                {jobs !== null && freshActive.length === 0 && (
                   <EmptyState
-                    title={
-                      (alerts?.length ?? 0) === 0
-                        ? "First, tell Nigel's what to look for"
-                        : "Nothing from the last 24 hours"
-                    }
-                    body={
-                      (alerts?.length ?? 0) === 0
-                        ? "Create an alert with the job titles you care about, then press Refresh."
-                        : "Press Refresh and Nigel's will check Adzuna and Reed for fresh Birmingham jobs."
-                    }
+                    title="Nothing fresh right now"
+                    body="Press Refresh and Nigel's will pull the newest Birmingham listings for your search from Adzuna and Reed."
                     action={
-                      (alerts?.length ?? 0) === 0 ? (
-                        <button
-                          type="button"
-                          onClick={() => switchTab("alerts")}
-                          className={`${btnPrimary} min-h-11 px-5 py-2.5`}
-                        >
-                          Set up an alert
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => void handleRefresh()}
-                          disabled={refreshing}
-                          className={`${btnPrimary} min-h-11 px-5 py-2.5`}
-                        >
-                          Refresh now
-                        </button>
-                      )
+                      <button
+                        type="button"
+                        onClick={() => void handleRefresh()}
+                        disabled={refreshing}
+                        className={`${btnPrimary} min-h-11 px-5 py-2.5`}
+                      >
+                        Refresh now
+                      </button>
                     }
                   />
                 )}
-                {activeJobs.length > 0 && (
+
+                {jobs !== null &&
+                  freshActive.length > 0 &&
+                  matching.length === 0 && (
+                    <EmptyState
+                      title="No jobs match this search"
+                      body={`${freshActive.length} fresh job${freshActive.length === 1 ? " is" : "s are"} stored but none fit the current terms and filters. Loosen them, or press Refresh to hunt for new matches.`}
+                      action={
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSearch({
+                              ...DEFAULT_SEARCH,
+                              terms: search.terms,
+                              sort: search.sort,
+                            })
+                          }
+                          className={`${btnPrimary} min-h-11 px-5 py-2.5`}
+                        >
+                          Clear filters
+                        </button>
+                      }
+                    />
+                  )}
+
+                {displayedJobs.length > 0 && (
                   <ul className="space-y-3">
-                    {activeJobs.map((job) => (
+                    {displayedJobs.map((job) => (
                       <JobCard
                         key={job.id}
                         job={job}
+                        isNew={newIds.has(job.id)}
                         onOpen={() => openJob(job)}
+                        onHide={() => hideJob(job)}
                       />
                     ))}
                   </ul>
                 )}
-              </>
+              </div>
             ))}
 
           {tab === "applied" &&
@@ -422,6 +545,7 @@ function AppShell() {
                       <JobCard
                         key={job.id}
                         job={job}
+                        isNew={false}
                         onOpen={() => openJob(job)}
                       />
                     ))}
@@ -430,21 +554,20 @@ function AppShell() {
               </>
             ))}
 
-          {tab === "alerts" && (
-            <AlertsPanel
+          {tab === "saved" && (
+            <SavedSearches
               alerts={alerts}
-              busy={busyAlerts}
-              onCreate={createAlert}
-              onUpdate={updateAlert}
-              onDelete={deleteAlert}
+              busy={busySearches}
+              onLoad={loadSearch}
+              onDelete={(alert) => void deleteSearch(alert)}
             />
           )}
         </section>
       </main>
 
       <footer className="border-t border-line py-5 text-center text-xs text-ink-soft">
-        Sources: Adzuna &amp; Reed · Birmingham only · Unapplied jobs are
-        removed after 24 hours
+        Sources: Adzuna &amp; Reed · Birmingham only · Unapplied jobs leave 24
+        hours after they were posted
       </footer>
     </div>
   );
