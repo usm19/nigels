@@ -213,6 +213,12 @@ export interface JobsResponse {
   jobs: Job[];
 }
 
+/** The signed-in user's applied jobs (snapshots, shaped as Job with
+ *  status = "applied"). */
+export interface AppliedResponse {
+  applied: Job[];
+}
+
 export interface JobDetailResponse {
   job: Job;
   /**

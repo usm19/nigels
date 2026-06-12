@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { Alert, AlertsResponse } from "@/lib/types";
 import { CONTRACT_TYPES, EMPLOYMENT_TYPES, EXPERIENCE_LEVELS } from "@/lib/types";
-import { getSupabase } from "@/lib/server/supabase";
+import { getServerSupabase } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -39,7 +39,14 @@ const AlertInputSchema = z.object({
 
 export async function GET() {
   try {
-    const sb = getSupabase();
+    const sb = await getServerSupabase();
+    const {
+      data: { user },
+    } = await sb.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+    }
+    // Row-level security scopes this to the signed-in user's own saved searches.
     const { data, error } = await sb
       .from("alerts")
       .select("*")
@@ -67,10 +74,16 @@ export async function POST(request: Request) {
     );
   }
   try {
-    const sb = getSupabase();
+    const sb = await getServerSupabase();
+    const {
+      data: { user },
+    } = await sb.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+    }
     const { data, error } = await sb
       .from("alerts")
-      .insert(input)
+      .insert({ ...input, user_id: user.id })
       .select("*")
       .single();
     if (error) throw new Error(error.message);

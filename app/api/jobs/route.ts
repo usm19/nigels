@@ -24,11 +24,11 @@ export async function GET() {
 
     const nowMs = Date.now();
     const todayDays = londonTodayEpochDays();
-    // Read-time pass of the always-on exclusion, plus the 24h freshness rule.
+    // The shared active pool: non-excluded jobs still inside the 24-hour window.
+    // "Applied" is now per-user (the applied_jobs table), so it's no longer a
+    // property of the shared job — the client hides the user's own applied ones.
     const jobs = ((data ?? []) as Job[]).filter(
-      (j) =>
-        !isExcluded(j) &&
-        (j.status === "applied" || !isExpiredByPosting(j, nowMs, todayDays))
+      (j) => !isExcluded(j) && !isExpiredByPosting(j, nowMs, todayDays)
     );
 
     const body: JobsResponse = { jobs };

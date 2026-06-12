@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Moon, Sun } from "lucide-react";
+import { Check, LogOut, Moon, Sun } from "lucide-react";
+import { btnGhost } from "./ui";
 
 // Theme + general preferences only. The halal/haram and commission-only
 // filters are PERMANENT and intentionally have no control here or anywhere.
@@ -17,8 +18,15 @@ function applyTheme(choice: ThemeChoice) {
   }
 }
 
-export function SettingsPanel() {
+export function SettingsPanel({
+  userEmail,
+  onSignOut,
+}: {
+  userEmail?: string;
+  onSignOut?: () => void | Promise<void>;
+}) {
   const [theme, setTheme] = useState<ThemeChoice | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     setTheme(
@@ -38,6 +46,39 @@ export function SettingsPanel() {
 
   return (
     <div className="space-y-5">
+      {onSignOut && (
+        <section className="card-shadow rounded-2xl border border-line bg-surface p-5 sm:p-6">
+          <h2 className="font-display text-lg font-semibold text-ink">Account</h2>
+          <p className="mt-1 text-sm text-ink-soft">
+            {userEmail ? (
+              <>
+                Signed in as{" "}
+                <span className="font-medium text-ink">{userEmail}</span>. Your
+                saved searches and applied jobs are private to your account.
+              </>
+            ) : (
+              "Your saved searches and applied jobs are private to your account."
+            )}
+          </p>
+          <button
+            type="button"
+            disabled={signingOut}
+            onClick={async () => {
+              setSigningOut(true);
+              try {
+                await onSignOut();
+              } finally {
+                setSigningOut(false);
+              }
+            }}
+            className={`${btnGhost} mt-4 min-h-11 px-4 py-2`}
+          >
+            <LogOut size={16} aria-hidden />
+            {signingOut ? "Signing out…" : "Sign out"}
+          </button>
+        </section>
+      )}
+
       <section className="card-shadow rounded-2xl border border-line bg-surface p-5 sm:p-6">
         <h2 className="font-display text-lg font-semibold text-ink">Theme</h2>
         <p className="mt-1 text-sm text-ink-soft">

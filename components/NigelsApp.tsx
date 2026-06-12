@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   Alert,
   Job,
-  JobDetailResponse,
   RefreshRequest,
   RefreshResponse,
   SearchScope,
@@ -18,6 +17,8 @@ import {
   scopeFromAlert,
   searchFromAlert,
 } from "@/lib/search";
+import type { Session } from "@supabase/supabase-js";
+import { getBrowserSupabase } from "@/lib/supabase/client";
 import { TickProvider, useNow } from "./TickContext";
 import { TopBar } from "./TopBar";
 import { Sidebar, type TabId } from "./Sidebar";
@@ -26,7 +27,8 @@ import { JobCard } from "./JobCard";
 import { JobDetail } from "./JobDetail";
 import { SavedSearches } from "./SavedSearches";
 import { SettingsPanel } from "./SettingsPanel";
-import { EmptyState, Notice, SkeletonCards, btnPrimary } from "./ui";
+import { LoginScreen } from "./LoginScreen";
+import { EmptyState, Notice, SkeletonCards, Spinner, btnPrimary } from "./ui";
 
 const REFRESH_COOLDOWN_MS = 12_000;
 const LAST_REFRESH_KEY = "nigels-last-refresh";
@@ -37,14 +39,56 @@ const HIDDEN_KEY = "nigels-hidden-v1";
 export default function NigelsApp() {
   return (
     <TickProvider>
-      <AppShell />
+      <AuthGate />
     </TickProvider>
   );
 }
 
+/**
+ * Gate the whole app behind sign-in. `session === undefined` means "still
+ * checking" (brief), `null` means signed out (show the login screen), and a
+ * value means signed in (show the app).
+ */
+function AuthGate() {
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
+
+  useEffect(() => {
+    const supabase = getBrowserSupabase();
+    let active = true;
+    void supabase.auth.getSession().then(({ data }) => {
+      if (active) setSession(data.session);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+      setSession(next);
+    });
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
+  async function signOut() {
+    try {
+      await getBrowserSupabase().auth.signOut();
+    } catch {
+      // onAuthStateChange still fires; nothing else to do.
+    }
+  }
+
+  if (session === undefined) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center text-ink-soft">
+        <Spinner />
+      </div>
+    );
+  }
+  if (session === null) return <LoginScreen />;
+  return <AppShell userEmail={session.user.email ?? ""} onSignOut={signOut} />;
+}
+
 interface DetailState {
   jobId: string;
-  data: JobDetailResponse;
+  data: { job: Job; fullDescriptionHtml: string | null };
   loading: boolean;
   failed: boolean;
 }
@@ -82,13 +126,21 @@ function refreshBody(s: SearchState): RefreshRequest {
   };
 }
 
-function AppShell() {
+function AppShell({
+  userEmail,
+  onSignOut,
+}: {
+  userEmail: string;
+  onSignOut: () => void | Promise<void>;
+}) {
   const now = useNow();
 
   const [tab, setTab] = useState<TabId>("jobs");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [jobs, setJobs] = useState<Job[] | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
+  // The signed-in user's own applied jobs (snapshots, status = "applied").
+  const [applied, setApplied] = useState<Job[] | null>(null);
   const [jobsSearch, setJobsSearch] = useState<SearchState>(DEFAULT_SEARCH);
   const [govSearch, setGovSearch] = useState<SearchState>(DEFAULT_SEARCH);
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
@@ -124,18 +176,24 @@ function AppShell() {
 
     void (async () => {
       try {
-        const [jobsRes, alertsRes] = await Promise.all([
+        const [jobsRes, alertsRes, appliedRes] = await Promise.all([
           fetch("/api/jobs"),
           fetch("/api/alerts"),
+          fetch("/api/applied"),
         ]);
-        if (!jobsRes.ok || !alertsRes.ok) throw new Error("load failed");
+        if (!jobsRes.ok || !alertsRes.ok || !appliedRes.ok) {
+          throw new Error("load failed");
+        }
         const jobsBody = (await jobsRes.json()) as { jobs: Job[] };
         const alertsBody = (await alertsRes.json()) as { alerts: Alert[] };
+        const appliedBody = (await appliedRes.json()) as { applied: Job[] };
         if (!jobsSupersededRef.current) setJobs(jobsBody.jobs);
         setAlerts(alertsBody.alerts);
+        setApplied(appliedBody.applied);
       } catch {
         if (!jobsSupersededRef.current) setJobs((prev) => prev ?? []);
         setAlerts((prev) => prev ?? []);
+        setApplied((prev) => prev ?? []);
         setNotice({
           kind: "error",
           text: "Couldn't load your saved jobs just now — press Refresh to try again.",
@@ -242,12 +300,21 @@ function AppShell() {
   );
 
   const nowMs = now || Date.now();
+  // Jobs the signed-in user has already applied to (by source + source id).
+  const appliedKeys = useMemo(
+    () =>
+      new Set((applied ?? []).map((j) => `${j.source}::${j.source_job_id}`)),
+    [applied]
+  );
   const freshActive = useMemo(
     () =>
       (jobs ?? []).filter(
-        (j) => j.status === "active" && !isExpiredByPosting(j, nowMs)
+        (j) =>
+          j.status === "active" &&
+          !isExpiredByPosting(j, nowMs) &&
+          !appliedKeys.has(`${j.source}::${j.source_job_id}`)
       ),
-    [jobs, nowMs]
+    [jobs, nowMs, appliedKeys]
   );
   const jobsMatching = useMemo(
     () => applySearchFilters(freshActive, jobsSearch, nowMs, "jobs"),
@@ -267,14 +334,14 @@ function AppShell() {
   );
   const appliedJobs = useMemo(
     () =>
-      (jobs ?? [])
-        .filter((j) => j.status === "applied")
+      (applied ?? [])
+        .slice()
         .sort(
           (a, b) =>
             Date.parse(b.applied_at ?? b.first_seen_at) -
             Date.parse(a.applied_at ?? a.first_seen_at)
         ),
-    [jobs]
+    [applied]
   );
 
   function openJob(job: Job) {
@@ -284,23 +351,23 @@ function AppShell() {
       loading: job.source === "reed",
       failed: false,
     });
+    // Only Reed needs a live fetch (its full advert). Keyed by source job id, so
+    // it works for both live jobs and applied snapshots.
+    if (job.source !== "reed") return;
     void (async () => {
       try {
-        const res = await fetch(`/api/jobs/${job.id}`);
+        const res = await fetch(
+          `/api/reed-description?id=${encodeURIComponent(job.source_job_id)}`
+        );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as JobDetailResponse;
+        const data = (await res.json()) as { html: string | null };
         setDetail((prev) => {
           if (!prev || prev.jobId !== job.id) return prev;
-          const freshJob = {
-            ...data.job,
-            status: prev.data.job.status,
-            applied_at: prev.data.job.applied_at,
-          };
           return {
-            jobId: job.id,
-            data: { job: freshJob, fullDescriptionHtml: data.fullDescriptionHtml },
+            ...prev,
+            data: { ...prev.data, fullDescriptionHtml: data.html },
             loading: false,
-            failed: data.job.source === "reed" && !data.fullDescriptionHtml,
+            failed: !data.html,
           };
         });
       } catch {
@@ -330,9 +397,9 @@ function AppShell() {
     setHiddenIds(new Set());
   }
 
-  async function toggleApplied(job: Job, applied: boolean) {
+  async function toggleApplied(job: Job, markApplied: boolean) {
     if (
-      !applied &&
+      !markApplied &&
       isExpiredByPosting({ ...job, status: "active" }, Date.now())
     ) {
       const sure = window.confirm(
@@ -340,28 +407,63 @@ function AppShell() {
       );
       if (!sure) return;
     }
+    const key = `${job.source}::${job.source_job_id}`;
     setBusyApplied(true);
     try {
-      const res = await fetch(`/api/jobs/${job.id}/applied`, {
-        method: "POST",
+      const res = await fetch("/api/applied", {
+        method: markApplied ? "POST" : "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ applied }),
+        body: JSON.stringify({
+          source: job.source,
+          sourceJobId: job.source_job_id,
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const { job: updated } = (await res.json()) as { job: Job };
-      setJobs((list) =>
-        (list ?? []).map((j) => (j.id === updated.id ? updated : j))
-      );
-      setDetail((prev) =>
-        prev && prev.jobId === updated.id
-          ? { ...prev, data: { ...prev.data, job: updated } }
-          : prev
-      );
-      setNotice(
-        applied
-          ? { kind: "info", text: "Saved — you'll find it in the Applied tab." }
-          : { kind: "info", text: "Moved back to the live jobs list." }
-      );
+
+      if (markApplied) {
+        const { applied: created } = (await res.json()) as { applied: Job[] };
+        const item = created[0];
+        setApplied((list) => {
+          const others = (list ?? []).filter(
+            (a) => `${a.source}::${a.source_job_id}` !== key
+          );
+          return item ? [item, ...others] : others;
+        });
+        const appliedAt = item?.applied_at ?? new Date().toISOString();
+        setDetail((prev) =>
+          prev && prev.jobId === job.id
+            ? {
+                ...prev,
+                data: {
+                  ...prev.data,
+                  job: { ...prev.data.job, status: "applied", applied_at: appliedAt },
+                },
+              }
+            : prev
+        );
+        setNotice({
+          kind: "info",
+          text: "Saved — you'll find it in the Applied tab.",
+        });
+      } else {
+        setApplied((list) =>
+          (list ?? []).filter(
+            (a) => `${a.source}::${a.source_job_id}` !== key
+          )
+        );
+        setDetail((prev) =>
+          prev && prev.jobId === job.id
+            ? {
+                ...prev,
+                data: {
+                  ...prev.data,
+                  job: { ...prev.data.job, status: "active", applied_at: null },
+                },
+              }
+            : prev
+        );
+        setNotice({ kind: "info", text: "Moved back to the live jobs list." });
+      }
     } catch {
       setNotice({
         kind: "error",
@@ -527,7 +629,7 @@ function AppShell() {
   const counts = {
     jobs: jobs === null ? null : jobsDisplayed.length,
     government: jobs === null ? null : govDisplayed.length,
-    applied: jobs === null ? null : appliedJobs.length,
+    applied: applied === null ? null : appliedJobs.length,
     saved: alerts === null ? null : alerts.length,
   };
 
@@ -585,8 +687,8 @@ function AppShell() {
             {tab === "applied" &&
               (detailView ?? (
                 <>
-                  {jobs === null && <SkeletonCards />}
-                  {jobs !== null && appliedJobs.length === 0 && (
+                  {applied === null && <SkeletonCards />}
+                  {applied !== null && appliedJobs.length === 0 && (
                     <EmptyState
                       title="Nothing applied yet"
                       body="When you mark a job as applied, it moves here and is kept safe — applied jobs never expire."
@@ -616,7 +718,9 @@ function AppShell() {
               />
             )}
 
-            {tab === "settings" && <SettingsPanel />}
+            {tab === "settings" && (
+              <SettingsPanel userEmail={userEmail} onSignOut={onSignOut} />
+            )}
           </section>
         </main>
       </div>

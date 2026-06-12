@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { Alert } from "@/lib/types";
 import { CONTRACT_TYPES, EMPLOYMENT_TYPES, EXPERIENCE_LEVELS } from "@/lib/types";
-import { getSupabase } from "@/lib/server/supabase";
+import { getServerSupabase } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -59,7 +59,15 @@ export async function PATCH(
     return NextResponse.json({ error: "Nothing to change." }, { status: 400 });
   }
   try {
-    const sb = getSupabase();
+    const sb = await getServerSupabase();
+    const {
+      data: { user },
+    } = await sb.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+    }
+    // RLS ensures a user can only ever touch their own saved search; a row that
+    // isn't theirs is invisible, so the update affects nothing -> 404.
     const { data, error } = await sb
       .from("alerts")
       .update(patch)
@@ -88,7 +96,14 @@ export async function DELETE(
     return NextResponse.json({ error: "Saved search not found." }, { status: 404 });
   }
   try {
-    const sb = getSupabase();
+    const sb = await getServerSupabase();
+    const {
+      data: { user },
+    } = await sb.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+    }
+    // RLS scopes the delete to the user's own rows.
     const { error } = await sb.from("alerts").delete().eq("id", id);
     if (error) throw new Error(error.message);
     return NextResponse.json({ ok: true });
