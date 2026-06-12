@@ -88,7 +88,9 @@ async function cardSectorBadges() {
       : "private"
   );
 }
-await page.click('[role="radio"]:has-text("Public sector")');
+const sectorBtn = (label) =>
+  page.locator(`div[aria-label="Sector"] button`, { hasText: label }).first();
+await sectorBtn("Public sector").click();
 await page.waitForTimeout(600);
 const pubBadges = await cardSectorBadges();
 check(
@@ -96,7 +98,7 @@ check(
   pubBadges.length > 0 && pubBadges.every((s) => s === "public_sector"),
   `${pubBadges.length} cards`
 );
-await page.click('[role="radio"]:has-text("Private")');
+await sectorBtn("Private").click();
 await page.waitForTimeout(600);
 const privBadges = await cardSectorBadges();
 check(
@@ -104,7 +106,7 @@ check(
   privBadges.length > 0 && privBadges.every((s) => s === "private"),
   `${privBadges.length} private cards`
 );
-await page.click('[role="radio"]:has-text("All")');
+await sectorBtn("All").click();
 await page.waitForTimeout(400);
 
 // --- HEADLINE: real posting age + no reset on refresh ---
@@ -172,15 +174,23 @@ await page.waitForSelector("main ul > li h3");
 await page.click('aside nav button:has-text("Settings")');
 await page.waitForSelector('h2:has-text("Theme")');
 check("Settings has a theme chooser", (await page.locator('button:has-text("Royal"), button:has-text("Galaxy")').count()) >= 2);
-// Scan EVERY tab for any interactive control to disable the always-on filter.
+// Scan EVERY tab for any toggle/switch/checkbox to disable the always-on
+// filter. Word boundaries + excluding job-card open/hide buttons avoids
+// false positives from legitimate job content ("Commissioning Manager",
+// a "Halal Butcher" carve-out job).
 let disableControl = 0;
+const filterWord = /\b(halal|haram|commission|sharia)\b/;
 for (const t of ["jobs", "government", "applied", "saved", "settings"]) {
   await page.click(`aside nav button:has-text("${t[0].toUpperCase() + t.slice(1)}")`);
   await page.waitForTimeout(300);
-  const controls = await page.locator('button, input[type=checkbox], [role=switch], [role=radio]').all();
+  const controls = await page
+    .locator('input[type=checkbox], [role=switch], button[aria-pressed]')
+    .all();
   for (const c of controls) {
-    const label = ((await c.getAttribute("aria-label")) ?? (await c.innerText().catch(() => "")) ?? "").toLowerCase();
-    if (/halal|haram|commission|sharia/.test(label)) disableControl++;
+    const aria = (await c.getAttribute("aria-label")) ?? "";
+    if (/^(open|hide)\b/i.test(aria)) continue; // job-card nav buttons
+    const label = `${aria} ${await c.innerText().catch(() => "")}`.toLowerCase();
+    if (filterWord.test(label)) disableControl++;
   }
 }
 check("NO control anywhere to disable the halal/commission filter", disableControl === 0, `${disableControl} found`);

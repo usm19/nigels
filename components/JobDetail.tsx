@@ -122,7 +122,7 @@ export function JobDetail({
                       {formatDateOnlyNice(job.source_posted_date)}
                     </span>{" "}
                     on {sourceName}{" "}
-                    <span className="text-ink-soft/80">
+                    <span className="text-ink-soft">
                       ({ago ?? "…"} — {sourceName} gives the date only, not the
                       time of day)
                     </span>
@@ -134,7 +134,7 @@ export function JobDetail({
                       {formatDateTimeNice(job.source_posted_date)}
                     </span>{" "}
                     on {sourceName}{" "}
-                    <span className="text-ink-soft/80">
+                    <span className="text-ink-soft">
                       ({ago ?? "…"} — the real time it appeared on {sourceName})
                     </span>
                   </>
@@ -146,7 +146,7 @@ export function JobDetail({
           </div>
           <div>
             <dt className="sr-only">First spotted</dt>
-            <dd className="text-ink-soft/80">
+            <dd className="text-ink-soft">
               First spotted by Nigel&rsquo;s{" "}
               {mounted ? timeAgo(job.first_seen_at, now) : "…"}
             </dd>

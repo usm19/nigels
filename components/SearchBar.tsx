@@ -154,17 +154,12 @@ export function SearchBar({
           <span className="mb-1.5 block text-sm font-medium text-ink">
             Sector
           </span>
-          <div
-            role="radiogroup"
-            aria-label="Sector"
-            className="flex flex-wrap gap-2"
-          >
+          <div role="group" aria-label="Sector" className="flex flex-wrap gap-2">
             {SECTOR_FILTER_OPTIONS.map((o) => (
               <button
                 key={o.value}
                 type="button"
-                role="radio"
-                aria-checked={search.sectorFilter === o.value}
+                aria-pressed={search.sectorFilter === o.value}
                 onClick={() => patch({ sectorFilter: o.value })}
                 className={`min-h-10 rounded-xl border px-3.5 text-sm font-medium transition-all duration-150 ${
                   search.sectorFilter === o.value
