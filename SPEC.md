@@ -20,8 +20,15 @@ A job's displayed age ("posted X ago") and its 24-hour lifecycle are
 calculated from the REAL posting time on the source site
 (`source_posted_date`), NEVER from `first_seen_at` or the refresh time.
 
-- **Adzuna** provides `created` (full ISO 8601 timestamp) →
-  `posted_time_precision = 'exact'`, age shown to seconds/minutes/hours.
+- **Adzuna** provides `created` (full ISO 8601 timestamp), BUT Adzuna is an
+  aggregator and `created` is frequently its *crawl* time, not the real
+  posting time (verified: jobs stamped "today" that Reed shows posted weeks
+  earlier; many jobs share an identical `created` second — a batch crawl). So
+  Adzuna jobs are truth-checked against Reed (matched by title + employer):
+  a match adopts Reed's real date as `date_only` (stale ones dropped); an
+  unmatched job is shown `date_only` too — never a fabricated minute. A
+  24h-from-`first_seen_at` safety cap stops any re-listed stale Adzuna job
+  lingering. See `lib/server/resolve-source.ts`.
 - **Reed** provides `date` (DD/MM/YYYY, NO time of day) →
   `posted_time_precision = 'date_only'`, age shown honestly as
   "today / yesterday / X days ago". Precise times must never be fabricated

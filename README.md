@@ -15,8 +15,8 @@ commission-only roles, everywhere and with no way to switch it off.
   employment/contract/experience/salary/posted-within filters, sorting,
   hide, save-search) and the live list of everything that isn't a
   government employer. Every card shows the job's age from its **real
-  posting time on the source site**: to the minute for Adzuna and Jooble,
-  date-level ("today/yesterday") for Reed and some JSearch listings.
+  posting time on the source site**: to the minute for Jooble, and
+  date-level ("today/yesterday") for Reed, Adzuna and some JSearch listings.
 - **Government** — its own search bar and list, showing only jobs at
   government employers (councils, civil service, ministries).
 - **Applied** — jobs you've marked as applied; kept forever.
@@ -57,11 +57,21 @@ or create a **Web Service** from this repo with:
 
 ## Honest limitations
 
-- **"Posted X ago" uses each source's own posting time.** Adzuna and Jooble
-  provide a full timestamp (precise to the minute); **Reed only provides a
-  date**, and **JSearch's precision varies** (many listings resolve only to
-  day-level), so those honestly say "today/yesterday" rather than a made-up
-  hour count. The 24-hour auto-removal uses the same posting time.
+- **"Posted X ago" uses each source's own posting time.** Jooble provides a
+  full timestamp (precise to the minute); **Reed only provides a date**, and
+  **JSearch's precision varies** (many listings resolve only to day-level), so
+  those honestly say "today/yesterday" rather than a made-up hour count.
+- **Adzuna is an aggregator, so its timestamp is treated as day-level.** Many
+  Adzuna listings are jobs that also live on Reed, re-stamped with Adzuna's own
+  *crawl* time rather than the real posting time (we've seen a job stamped
+  "today" that Reed says was really posted weeks earlier). So Nigel's never
+  shows a precise "X minutes ago" for Adzuna: it checks each Adzuna job against
+  Reed's own listing (matched by title + employer) and uses Reed's **true date**
+  where they match — dropping genuinely stale ones — and otherwise shows an
+  honest "today/yesterday". The 24-hour auto-removal uses the same posting time,
+  plus a safety cap so no Adzuna job lingers beyond 24 hours from when Nigel's
+  first saw it. Matching is best-effort, so some Adzuna jobs that aren't on Reed
+  simply show day-level.
 - **Jooble and JSearch are bonus sources.** Their free feeds are largely
   national with vague locations, so after Nigel's strict Birmingham + 24-hour
   rules they usually add few jobs — Adzuna and Reed remain the backbone.
