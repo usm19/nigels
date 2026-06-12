@@ -5,6 +5,7 @@ import { htmlToText } from "./sanitize";
 import { detectHybrid, detectRemote, isBirminghamLocation } from "./filters";
 import { classifyExperience, classifySector } from "./classify";
 import { fetchJsonWithRetry } from "./http";
+import { londonWallClockToUtcIso } from "./time";
 
 // Adzuna GB job search. Docs: https://developer.adzuna.com/
 // Notes:
@@ -92,10 +93,10 @@ export async function searchAdzuna(q: SourceQuery): Promise<FetchedJob[]> {
         ? r.contract_type
         : null;
 
-    const posted =
-      r.created && !Number.isNaN(Date.parse(r.created))
-        ? new Date(r.created).toISOString()
-        : null;
+    // Adzuna's `created` is Europe/London wall-clock time mislabeled "Z".
+    // Re-interpret it as London local so the stored instant is true UTC
+    // (otherwise fresh jobs land ~1h in the future and show "just now").
+    const posted = r.created ? londonWallClockToUtcIso(r.created) : null;
 
     jobs.push({
       source: "adzuna",

@@ -11,6 +11,7 @@ import {
   contractTimeLabel,
   formatSalary,
   postedAgo,
+  postedStampCompact,
   timeAgo,
 } from "@/lib/format";
 import { useNow } from "./TickContext";
@@ -30,12 +31,15 @@ export function JobCard({ job, isNew, onOpen, onHide }: JobCardProps) {
   const mounted = now !== 0;
 
   // The corner shows the REAL posting age (source site time) — for applied
-  // jobs it shows when you applied instead.
+  // jobs it shows when you applied instead — with the exact listing
+  // date/time underneath so it's never ambiguous.
+  const isApplied = job.status === "applied" && job.applied_at;
   const cornerText = !mounted
     ? ""
-    : job.status === "applied" && job.applied_at
-      ? `applied ${timeAgo(job.applied_at, now)}`
+    : isApplied
+      ? `applied ${timeAgo(job.applied_at as string, now)}`
       : (postedAgo(job, now) ?? "time unknown");
+  const exactStamp = !mounted || isApplied ? null : postedStampCompact(job);
 
   const salary = formatSalary(job.salary_min, job.salary_max);
   const contractTime = contractTimeLabel(job.contract_time);
@@ -49,11 +53,18 @@ export function JobCard({ job, isNew, onOpen, onHide }: JobCardProps) {
             {job.title}
           </h3>
           <span
-            className={`shrink-0 whitespace-nowrap text-xs font-semibold tabular-nums text-gold sm:text-sm ${
+            className={`flex shrink-0 flex-col items-end text-right ${
               onHide ? "pr-8" : ""
             }`}
           >
-            {cornerText}
+            <span className="whitespace-nowrap text-xs font-semibold tabular-nums text-gold sm:text-sm">
+              {cornerText}
+            </span>
+            {exactStamp && (
+              <span className="whitespace-nowrap text-[11px] tabular-nums text-ink-soft">
+                {exactStamp}
+              </span>
+            )}
           </span>
         </div>
         <p className="mt-1 text-sm text-ink-soft sm:text-base">

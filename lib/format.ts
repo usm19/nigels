@@ -220,3 +220,23 @@ export function contractTimeLabel(
   if (contractTime === "part_time") return "Part-time";
   return null;
 }
+
+/**
+ * Compact "exact listing time" for a card: the real date (and, for exact
+ * sources, the time) the job was listed on the source site. Date-only
+ * sources render the stored date without timezone shift; exact sources
+ * render in the viewer's local time (Birmingham = London).
+ */
+export function postedStampCompact(job: Job): string | null {
+  if (!job.source_posted_date) return null;
+  const ms = Date.parse(job.source_posted_date);
+  if (Number.isNaN(ms)) return null;
+  if (effectivePrecision(job) === "date_only") {
+    const d = new Date(ms);
+    return format(
+      new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
+      "d MMM yyyy"
+    );
+  }
+  return format(ms, "d MMM yyyy, HH:mm");
+}

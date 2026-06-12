@@ -27,3 +27,61 @@ export function londonTodayEpochDays(): number {
 export function londonTodayStartIso(): string {
   return `${londonTodayYmd()}T00:00:00.000Z`;
 }
+
+const LONDON_PARTS = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/London",
+  hour12: false,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+/** Minutes Europe/London is ahead of UTC at a given instant (+60 in BST, 0 in GMT). */
+function londonOffsetMinutes(instantMs: number): number {
+  const parts = LONDON_PARTS.formatToParts(new Date(instantMs));
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+  let hour = get("hour");
+  if (hour === 24) hour = 0; // some engines emit "24" for midnight
+  const localAsUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    hour,
+    get("minute"),
+    get("second")
+  );
+  return Math.round((localAsUtc - instantMs) / 60_000);
+}
+
+/**
+ * Convert a timestamp whose wall-clock components are Europe/London local time
+ * into the true UTC instant (ISO string).
+ *
+ * Adzuna returns `created` as London wall-clock time but suffixes it with "Z"
+ * (e.g. "2026-06-12T17:04:13Z" when the real UTC instant is 16:04:13Z during
+ * BST). Parsing that as UTC pushes fresh jobs ~1 hour into the future, which
+ * the age display floors to "just now". Re-interpreting the wall clock as
+ * London local fixes it year-round (−1h in BST, −0h in GMT).
+ */
+export function londonWallClockToUtcIso(value: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(
+    value.trim()
+  );
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  const wallAsUtc = Date.UTC(
+    Number(y),
+    Number(mo) - 1,
+    Number(d),
+    Number(h),
+    Number(mi),
+    Number(s ?? "0")
+  );
+  if (Number.isNaN(wallAsUtc)) return null;
+  // London = UTC + offset, so the true UTC instant = wallClock − offset.
+  const trueUtcMs = wallAsUtc - londonOffsetMinutes(wallAsUtc) * 60_000;
+  return new Date(trueUtcMs).toISOString();
+}

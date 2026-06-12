@@ -112,23 +112,30 @@ export function JobDetail({
 
         <dl className="mt-4 space-y-1 text-sm text-ink-soft sm:text-base">
           <div>
-            <dt className="sr-only">Posted</dt>
+            <dt className="sr-only">Listed on the source site</dt>
             <dd>
               {job.source_posted_date ? (
                 dateOnly ? (
                   <>
-                    Posted <span className="font-medium text-ink">{ago ?? "…"}</span>{" "}
+                    Listed{" "}
+                    <span className="font-medium text-ink">
+                      {formatDateOnlyNice(job.source_posted_date)}
+                    </span>{" "}
+                    on {sourceName}{" "}
                     <span className="text-ink-soft/80">
-                      ({formatDateOnlyNice(job.source_posted_date)} —{" "}
-                      {sourceName} provides the date only, not the time)
+                      ({ago ?? "…"} — {sourceName} gives the date only, not the
+                      time of day)
                     </span>
                   </>
                 ) : (
                   <>
-                    Posted <span className="font-medium text-ink">{ago ?? "…"}</span>{" "}
+                    Listed{" "}
+                    <span className="font-medium text-ink">
+                      {formatDateTimeNice(job.source_posted_date)}
+                    </span>{" "}
+                    on {sourceName}{" "}
                     <span className="text-ink-soft/80">
-                      ({formatDateTimeNice(job.source_posted_date)} —{" "}
-                      {sourceName}&rsquo;s own timestamp)
+                      ({ago ?? "…"} — the real time it appeared on {sourceName})
                     </span>
                   </>
                 )
