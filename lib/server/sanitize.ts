@@ -24,7 +24,9 @@ export function sanitizeJobHtml(html: string): string {
       "blockquote",
       "a",
     ],
-    allowedAttributes: { a: ["href"] },
+    // target and rel must be allowed, otherwise the attributes added by the
+    // transform below are stripped straight back out again.
+    allowedAttributes: { a: ["href", "target", "rel"] },
     allowedSchemes: ["http", "https", "mailto"],
     transformTags: {
       a: sanitizeHtml.simpleTransform("a", {

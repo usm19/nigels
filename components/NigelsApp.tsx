@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   Alert,
   Job,
@@ -52,6 +52,9 @@ function AppShell() {
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const [busyApplied, setBusyApplied] = useState(false);
   const [busyAlerts, setBusyAlerts] = useState(false);
+  // True once a refresh has delivered jobs, so a slow initial load can't
+  // overwrite fresher data.
+  const jobsSupersededRef = useRef(false);
 
   // First load: stored jobs + alerts, and the remembered refresh time.
   useEffect(() => {
@@ -71,11 +74,11 @@ function AppShell() {
         if (!jobsRes.ok || !alertsRes.ok) throw new Error("load failed");
         const jobsBody = (await jobsRes.json()) as { jobs: Job[] };
         const alertsBody = (await alertsRes.json()) as { alerts: Alert[] };
-        setJobs(jobsBody.jobs);
+        if (!jobsSupersededRef.current) setJobs(jobsBody.jobs);
         setAlerts(alertsBody.alerts);
       } catch {
-        setJobs([]);
-        setAlerts([]);
+        if (!jobsSupersededRef.current) setJobs((prev) => prev ?? []);
+        setAlerts((prev) => prev ?? []);
         setNotice({
           kind: "error",
           text: "Couldn't load your saved jobs just now — press Refresh to try again.",
@@ -85,14 +88,21 @@ function AppShell() {
   }, []);
 
   const handleRefresh = useCallback(async () => {
-    if (refreshing) return;
+    // The cooldown guard lives here (not just on the top-bar button) so every
+    // path that triggers a refresh respects it.
+    if (refreshing || Date.now() < cooldownUntil) return;
     setRefreshing(true);
     setNotice(null);
     try {
       const res = await fetch("/api/refresh", { method: "POST" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as RefreshResponse;
-      setJobs(data.jobs);
+      jobsSupersededRef.current = true;
+      // A total failure returns ok=false with no jobs — keep what's on
+      // screen rather than wiping the list.
+      setJobs((prev) =>
+        !data.ok && data.jobs.length === 0 ? (prev ?? []) : data.jobs
+      );
       const at = Date.parse(data.refreshedAt) || Date.now();
       setLastRefreshedAt(at);
       try {
@@ -120,7 +130,7 @@ function AppShell() {
       setRefreshing(false);
       setCooldownUntil(Date.now() + REFRESH_COOLDOWN_MS);
     }
-  }, [refreshing]);
+  }, [refreshing, cooldownUntil]);
 
   // Live views of the data. The expiry check reruns every tick so a job
   // crossing the 24-hour line disappears in real time (backup for the
