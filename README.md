@@ -17,6 +17,9 @@ problems, and defining the single highest-value software product to build.
 - [x] Skill packs installed (`.claude/skills/`, 175 skills from 21 packs;
       `claude-hud` is a plugin — install locally with
       `/plugin marketplace add jarrodwatts/claude-hud`)
-- [ ] Industry research brief (`docs/`)
-- [ ] Product decision
-- [ ] Build
+- [x] Industry research brief (`docs/01`–`04`, four citation-backed streams)
+- [x] Product decision — see **`docs/00-PRODUCT-DECISION.md`**: a
+      subcontractor-side retention-recovery platform for UK construction SMEs,
+      sold via cold email to Birmingham-area subcontractors (working title: Moiety)
+- [ ] Founder sign-off on the decision
+- [ ] Build (8-week plan in the decision doc)
