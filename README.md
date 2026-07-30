@@ -14,6 +14,9 @@ problems, and defining the single highest-value software product to build.
 ## Status
 
 - [x] Repository reset
+- [x] Skill packs installed (`.claude/skills/`, 175 skills from 21 packs;
+      `claude-hud` is a plugin — install locally with
+      `/plugin marketplace add jarrodwatts/claude-hud`)
 - [ ] Industry research brief (`docs/`)
 - [ ] Product decision
 - [ ] Build
