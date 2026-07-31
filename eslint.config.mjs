@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Third-party skill packs and generated/runtime artefacts:
+    ".claude/**",
+    "drizzle/**",
+    ".data/**",
   ]),
 ]);
 

@@ -9,7 +9,6 @@ import {
   bigint,
   boolean,
   date,
-  integer,
   jsonb,
   pgEnum,
   pgTable,
@@ -33,6 +32,15 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   name: text("name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const sessions = pgTable("sessions", {
+  id: text("id").primaryKey(), // random 256-bit token, stored raw (httpOnly cookie holds it)
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

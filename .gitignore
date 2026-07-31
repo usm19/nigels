@@ -12,6 +12,9 @@ build/
 .next/
 out/
 
+# Local embedded database
+.data/
+
 # Logs & OS noise
 *.log
 .DS_Store
