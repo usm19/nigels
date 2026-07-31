@@ -1,7 +1,13 @@
 # Product Decision: What We Are Building
 
+> **SUPERSEDED (31 July 2026):** Round-2 research (docs 05–07) found the Commercial
+> Payments Bill will phase out construction retentions entirely and that retention
+> recovery is one-and-done on the founder's now-primary criterion (customer retention).
+> The current ranking and recommendation live in **`08-FINAL-RANKING.md`**. This
+> document is kept as the round-1 record.
+
 **Date:** 30 July 2026
-**Status:** Recommendation — awaiting founder sign-off before build begins
+**Status:** Superseded by `08-FINAL-RANKING.md`
 **Inputs:** Four research streams (docs 01–04), all citation-backed.
 
 ---

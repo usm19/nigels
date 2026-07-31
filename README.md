@@ -17,9 +17,12 @@ problems, and defining the single highest-value software product to build.
 - [x] Skill packs installed (`.claude/skills/`, 175 skills from 21 packs;
       `claude-hud` is a plugin — install locally with
       `/plugin marketplace add jarrodwatts/claude-hud`)
-- [x] Industry research brief (`docs/01`–`04`, four citation-backed streams)
-- [x] Product decision — see **`docs/00-PRODUCT-DECISION.md`**: a
-      subcontractor-side retention-recovery platform for UK construction SMEs,
-      sold via cold email to Birmingham-area subcontractors (working title: Moiety)
+- [x] Industry research brief — round 1 (`docs/01`–`04`) and round 2
+      (`docs/05`–`07`: stickiness/churn, cold-email reality, competitor teardowns)
+- [x] Final ranking — see **`docs/08-FINAL-RANKING.md`**: #1 Temp-desk
+      Compliance OS for small UK recruitment agencies (74/100); #2 Quote-from-Inbox
+      Co-pilot for fabrication job shops (73/100); #3 Subcontractor Payment
+      Control (62.5/100). Round-1 pick (retention recovery) was demoted after the
+      Commercial Payments Bill's phased retention ban surfaced.
 - [ ] Founder sign-off on the decision
-- [ ] Build (8-week plan in the decision doc)
+- [ ] Build
