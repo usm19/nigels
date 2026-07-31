@@ -19,10 +19,12 @@ problems, and defining the single highest-value software product to build.
       `/plugin marketplace add jarrodwatts/claude-hud`)
 - [x] Industry research brief — round 1 (`docs/01`–`04`) and round 2
       (`docs/05`–`07`: stickiness/churn, cold-email reality, competitor teardowns)
-- [x] Final ranking — see **`docs/08-FINAL-RANKING.md`**: #1 Temp-desk
-      Compliance OS for small UK recruitment agencies (74/100); #2 Quote-from-Inbox
-      Co-pilot for fabrication job shops (73/100); #3 Subcontractor Payment
-      Control (62.5/100). Round-1 pick (retention recovery) was demoted after the
-      Commercial Payments Bill's phased retention ban surfaced.
-- [ ] Founder sign-off on the decision
+- [x] Round-3/4 hunt for an 85+ candidate: three sweeps + six adversarial
+      verifications (`docs/09`) — every 84–86 claim deflated to 37.5–62
+- [x] **Final verified ranking — `docs/10-FINAL-VERIFIED-RANKING.md`**: no
+      verified 85 exists under the constraint set; verified leader is the SRA
+      Compliance Register Suite for small law firms (62/100) with known, bounded
+      weaknesses; recommendation = one-week validation sprint, then build
+- [ ] Founder decision: Option A (build verified leader) / B (relax channel
+      constraint) / C (keep hunting — advised against)
 - [ ] Build
